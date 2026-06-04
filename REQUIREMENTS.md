@@ -59,18 +59,24 @@ This document is the source of truth for what the `hermes-nodes-plugin` package 
 ### FR-4: Configuration
 
 **FR-4.1** Plugin reads configuration from `~/.hermes/hermes-nodes.yaml` and env vars. Env vars override file values. Defaults if neither set:
-- `host`: `0.0.0.0`
+- `host`: `127.0.0.1` (the safe default — assumes nginx is fronting TLS)
 - `port`: `6969`
-- `tls_cert_path`: `~/.hermes/nodes/server.crt`
-- `tls_key_path`: `~/.hermes/nodes/server.key`
+- `tls_cert_path`: unset (TLS termination is expected at the reverse proxy)
+- `tls_key_path`: unset
 - `token_store_path`: `~/.hermes/nodes/tokens.json`
 - `token_encryption_key_env`: `HERMES_NODES_TOKEN_KEY` (the env var name, not the value)
+
+**FR-4.1a** The plugin MUST support two TLS modes:
+- **Reverse-proxied (default):** listens on `127.0.0.1:6969` plain HTTP. TLS is terminated by nginx/Caddy/etc in front.
+- **Direct TLS:** listens on `0.0.0.0:6969` (or any host) with `tls_cert_path` + `tls_key_path` configured. Used when no reverse proxy is in front.
+
+**FR-4.1b** Selection is automatic based on config: if both `tls_cert_path` and `tls_key_path` are set, use direct TLS; otherwise listen on plain HTTP (assume reverse proxy).
 
 **FR-4.2** The token encryption key is loaded from the env var named in `token_encryption_key_env`. If absent, the plugin refuses to start with a clear error message.
 
 **FR-4.3** First-run UX: if `tokens.json` doesn't exist, `hermes node pair` creates it (with a generated encryption key if `HERMES_NODES_TOKEN_KEY` is unset, warning the operator to persist it).
 
-**Acceptance:** Plugin starts with config from file; env var override beats file; missing token key produces a clear error.
+**Acceptance:** Plugin starts with config from file; env var override beats file; missing token key produces a clear error. Both TLS modes (reverse-proxied and direct) work end-to-end.
 
 ### FR-5: Audit logging
 
@@ -177,4 +183,3 @@ All of the following must be true:
 
 2. **Token rotation cadence:** v1 doesn't auto-rotate. Manual via `hermes node revoke` + `pair`. Acceptable?
 3. **Audit retention:** 1 year server-side default — fine?
-4. **TLS cert source:** do you have a cert from Let's Encrypt for `vps.yourdomain.com` already, or should the install doc cover self-signed for development?

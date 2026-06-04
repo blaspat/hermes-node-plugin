@@ -43,9 +43,57 @@ hermes --help | grep "node "
 # should show: node        Pair, list, and revoke remote node connections.
 ```
 
-## Configuration
+## TLS configuration
 
-The plugin reads from `~/.hermes/hermes-nodes.yaml` (created automatically on first run) and env vars. Env vars override file values.
+The plugin does **not** need its own TLS cert in the common case. You have three options:
+
+### Option A (recommended) — terminate TLS in nginx, run plugin on localhost
+
+Nginx fronts the public WSS endpoint and proxies to the plugin on `127.0.0.1:6969` over plain HTTP. This is how almost every production deployment looks.
+
+```nginx
+# /etc/nginx/sites-enabled/hermes.yourdomain.com
+upstream hermes_nodes {
+    server 127.0.0.1:6969;
+}
+
+server {
+    listen 443 ssl;
+    server_name hermes.yourdomain.com;
+    ssl_certificate     /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+
+    location /ws/nodes {
+        proxy_pass http://hermes_nodes;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;  # WSS connections are long-lived
+    }
+}
+```
+
+In this setup, the plugin binds to `127.0.0.1:6969` and `tls_cert_path` / `tls_key_path` are not used (use `0.0.0.0` for `host` is also unnecessary; `127.0.0.1` is the right choice for nginx-fronted deployments).
+
+### Option B — plugin terminates TLS directly
+
+If you're not using nginx (or another reverse proxy), point the plugin at your cert and key:
+
+```yaml
+host: 0.0.0.0
+port: 6969
+tls_cert_path: /etc/letsencrypt/live/yourdomain.com/fullchain.pem
+tls_key_path: /etc/letsencrypt/live/yourdomain.com/privkey.pem
+```
+
+You'll need to open port 6969 in your VPS firewall. Certbot with `--nginx` or `--standalone` both work; the plugin will read the resulting files on each start (no hot-reload in v1, restart on cert renewal).
+
+### Option C — development / self-signed
+
+For local testing without a real domain. Generate a cert, point the plugin at it, pin the CA on the node side. **Not recommended for production.**
+
+## Configuration reference
 
 ```yaml
 # ~/.hermes/hermes-nodes.yaml
