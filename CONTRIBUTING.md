@@ -5,10 +5,9 @@ for getting changes reviewed and merged.
 
 ## Ground rules
 
-- **Open an issue before opening a PR** for anything beyond a small fix. The
-  umbrella is at [#25](https://github.com/blaspat/hermes-nodes-plugin/issues/25)
-  for the v0.1.0 hardening pass; new work that doesn't fit under an existing
-  issue should get one first so the design can be discussed.
+- **Open an issue before opening a PR** for anything beyond a small fix. New
+  work that doesn't fit under an existing issue should get one first so the
+  design can be discussed before code lands.
 - **One logical change per PR.** Multiple unrelated fixes in a single PR make
   review slower and revert riskier. If you're cleaning up while you're in the
   file, ship the cleanup as a separate PR.
