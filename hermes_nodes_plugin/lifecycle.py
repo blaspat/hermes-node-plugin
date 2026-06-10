@@ -223,7 +223,16 @@ class ServerRunner:
 
         async def _serve() -> None:
             try:
-                await self._server.startup()
+                try:
+                    await self._server.startup()
+                except (OSError, SystemExit) as exc:
+                    logger.warning(
+                        "hermes-nodes: server startup failed "
+                        "(port %d): %s",
+                        self._config.port,
+                        exc,
+                    )
+                    return
                 if not self._server.should_exit:
                     await self._server.main_loop()
             finally:

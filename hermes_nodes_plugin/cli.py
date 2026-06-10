@@ -466,21 +466,25 @@ def _cmd_revoke(args: argparse.Namespace) -> int:
 
 
 def _cmd_status() -> int:
-    """Show whether the WSS server is listening.
+    """Show whether the WSS server is listening on the default port.
 
-    Re-routed through the lifecycle module so the answer reflects
-    the same runner instance the agent is using. Imported lazily to
-    keep the import graph shallow for callers that only need pair /
-    list / revoke (which never touch the runner).
+    Probes port 6969 directly with a TCP socket handshake rather than
+    checking an in-memory runner object, because the CLI runs in a
+    *separate process* from the gateway — _default_runner is
+    always None at CLI time.
     """
-    from hermes_nodes_plugin.lifecycle import _default_runner
+    import socket
 
-    runner = _default_runner
-    if runner is None or not runner.is_running:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2.0)
+    try:
+        s.connect(("127.0.0.1", 6969))
+        s.close()
+        print("hermes-nodes server: listening on 127.0.0.1:6969")
+        return 0
+    except (OSError, socket.timeout):
         print("hermes-nodes server: not running")
         return 1
-    print(f"hermes-nodes server: listening on {runner.host}:{runner.port}")
-    return 0
 
 
 # ---------------------------------------------------------------------------

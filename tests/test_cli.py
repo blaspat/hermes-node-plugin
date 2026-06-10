@@ -584,39 +584,53 @@ class TestCloseActiveConnectionStrict:
 
 
 class TestStatus:
-    def test_status_reports_listening_when_runner_running(
+    def test_status_reports_listening_when_port_bound(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """The positive branch of ``hermes node status`` reports
-        the bind address when the WSS server is up. We inject a
-        fake runner instead of standing up uvicorn — the helper
-        only reads ``host`` / ``port`` / ``is_running``.
+        the bind address when the WSS server is up. We mock
+        ``socket.socket.connect`` to succeed without a real server.
         """
-        import hermes_nodes_plugin.lifecycle as lc
+        import socket as sock_mod
 
-        class _FakeRunner:
-            host = "127.0.0.1"
-            port = 6969
-            is_running = True
+        class _ListeningSocket:
+            def __init__(self, *a, **kw):
+                pass
+            def settimeout(self, t):
+                pass
+            def connect(self, addr):
+                pass  # Success — server is "listening"
+            def close(self):
+                pass
 
-        monkeypatch.setattr(lc, "_default_runner", _FakeRunner())
+        monkeypatch.setattr(sock_mod, "socket", lambda *a, **kw: _ListeningSocket())
         rc = node_command(_parse(["node", "status"]))
         assert rc == 0
         out, _ = capsys.readouterr()
         assert "listening" in out
         assert "127.0.0.1:6969" in out
 
-    def test_status_reports_not_running_when_no_runner(
+    def test_status_reports_not_running_when_port_unbound(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Without a runner (CLI invocation before any session
-        start, or after a defensive start() failure) status
-        reports 'not running' and exits 1 — the operator can
-        tell the server didn't come up.
-        """
-        import hermes_nodes_plugin.lifecycle as lc
+        '''Without a bound port (server not started, or running in a
+        separate binary) status reports 'not running' and exits 1.
+        We mock ``socket.socket.connect`` to raise OSError so the
+        test doesn't depend on whether a real server is running.
+        '''
+        import socket as sock_mod
 
-        monkeypatch.setattr(lc, "_default_runner", None)
+        class _RefusingSocket:
+            def __init__(self, *a, **kw):
+                pass
+            def settimeout(self, t):
+                pass
+            def connect(self, addr):
+                raise OSError("Connection refused")
+            def close(self):
+                pass
+
+        monkeypatch.setattr(sock_mod, "socket", lambda *a, **kw: _RefusingSocket())
         rc = node_command(_parse(["node", "status"]))
         assert rc == 1
         out, _ = capsys.readouterr()
