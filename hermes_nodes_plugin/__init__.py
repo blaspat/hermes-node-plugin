@@ -151,41 +151,62 @@ def register(ctx) -> None:
     import os
 
     if os.environ.get("HERMES_NODES_AUTO_START", "1") == "1":
+        # Quick socket check: if port 6969 is already bound, the server
+        # is already running (e.g. from a previous gateway instance or
+        # a test server). Skip auto-start to avoid "address in use" spam.
+        import socket
 
-        def _start_server() -> None:
-            import asyncio
-            import contextlib
+        _port_free = True
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", 6969))
+            s.close()
+        except OSError:
+            _port_free = False
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                with contextlib.suppress(Exception):
-                    from hermes_nodes_plugin.lifecycle import _on_session_start
+        if _port_free:
 
-                    loop.run_until_complete(_on_session_start())
-                    log.info(
-                        "hermes-nodes-plugin: WSS server started on port 6969"
-                        " (background thread)",
+            def _start_server() -> None:
+                import asyncio
+                import contextlib
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    with contextlib.suppress(Exception):
+                        from hermes_nodes_plugin.lifecycle import _on_session_start
+
+                        loop.run_until_complete(_on_session_start())
+                        log.info(
+                            "hermes-nodes-plugin: WSS server started on port 6969"
+                            " (background thread)",
+                        )
+                    # Keep the loop alive so uvicorn tasks continue running.
+                    loop.run_forever()
+                except Exception as exc:
+                    log.warning(
+                        "hermes-nodes-plugin: server background thread failed: %s",
+                        exc,
                     )
-                # Keep the loop alive so uvicorn tasks continue running.
-                loop.run_forever()
+                finally:
+                    loop.close()
+
+            try:
+                import threading
+
+                t = threading.Thread(
+                    target=_start_server, daemon=True, name="hermes-nodes-wss"
+                )
+                t.start()
             except Exception as exc:
                 log.warning(
-                    "hermes-nodes-plugin: server background thread failed: %s", exc
+                    "hermes-nodes-plugin: could not start server thread: %s", exc
                 )
-            finally:
-                loop.close()
-
-        try:
-            import threading
-
-            t = threading.Thread(
-                target=_start_server, daemon=True, name="hermes-nodes-wss"
-            )
-            t.start()
-        except Exception as exc:
-            log.warning(
-                "hermes-nodes-plugin: could not start server thread: %s", exc
+        else:
+            log.debug(
+                "hermes-nodes-plugin: port 6969 already bound — "
+                "server likely already running. Skipping auto-start."
             )
     else:
         log.debug(
