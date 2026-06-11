@@ -1,5 +1,5 @@
 # hermes-nodes-plugin
-> One‑paragraph hook: A Hermes Agent plugin that turns any Hermes profile into a “brain” to command remote nodes over an authenticated WebSocket.
+A Hermes Agent plugin that turns any Hermes profile into a “brain” to command remote nodes over an authenticated WebSocket.
 
 ## Table of Contents
 - [Prerequisites](#prerequisites)
@@ -11,31 +11,31 @@
 - [Related](#related)
 
 ## Prerequisites
-> Install Python 3.11+, uv (optional), and have a Hermes Agent profile set up.
+Install Python 3.11+, uv (optional), and have a Hermes Agent set up.
 
 ## Installation
-> Install the plugin via pip:
->
-> ```bash
-> python -m pip install hermes-nodes-plugin==0.1.0
-> # or with uv for speed
-> uv pip install hermes-nodes-plugin==0.1.0
-> ```
->
-> For development, clone the repo and install in editable mode.
->
-> ```bash
-> git clone https://github.com/blaspat/hermes-nodes-plugin.git
-> cd hermes-nodes-plugin
-> python -m pip install -e .
-> # or uv pip install -e .
-> ```
->
-> Verify the CLI appears:
->
-> ```bash
-> hermes node --help
-> ```
+Install the plugin via pip:
+
+ ```bash
+ python -m pip install hermes-nodes-plugin==0.1.0
+ # or with uv for speed
+ uv pip install hermes-nodes-plugin==0.1.0
+ ```
+
+ For development, clone the repo and install in editable mode.
+
+ ```bash
+ git clone https://github.com/blaspat/hermes-nodes-plugin.git
+ cd hermes-nodes-plugin
+ python -m pip install -e .
+ # or uv pip install -e .
+ ```
+
+ Verify the CLI appears:
+
+ ```bash
+ hermes node --help
+ ```
 
 ## Core Features
 - `node_exec(target, command)`: run shell commands on a paired node.
@@ -57,9 +57,9 @@
 - Flow: Fork → Branch → PR.
 
 ## FAQ
-- **Q:** Does it support Windows nodes?
+- **Q:** Does it support Windows nodes?  
   A: Not officially; only Linux/macOS (WSL works).
-- **Q:** How is audit handled?
+- **Q:** How is audit handled?  
   A: All interactions are logged to `~/.hermes/logs/nodes-audit.log` and retained per `audit_retention_days`.
 
 ## Related
