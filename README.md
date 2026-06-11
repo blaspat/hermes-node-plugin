@@ -67,4 +67,4 @@
 - **[Hermes Agent](`github.com/NousResearch/hermes-agent`):** Core framework.
 
 ---
-License: [MIT](LICENSE.md) | Author: © 2026 Blasius Patrick
+License: [MIT](LICENSE) | Author: © 2026 Blasius Patrick
