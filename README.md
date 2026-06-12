@@ -252,7 +252,7 @@ hermes node pair --name work-laptop
 #
 #   Run on the laptop:
 #     hermes-node pair \
-#       --server wss://vps.yourdomain.com:6969 \
+#       --server wss://vps.yourdomain.com:6969/ws/nodes \
 #       --token aBcD1234eFgH5678...
 
 # List paired nodes + connection state
