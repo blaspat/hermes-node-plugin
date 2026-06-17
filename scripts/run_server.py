@@ -4,17 +4,10 @@ Hermes Nodes WSS server runner.
 
 Starts the ServerRunner (hermes_nodes_plugin.lifecycle) in a daemon thread
 with its own asyncio event loop.  The main thread just keeps the process
-alive so systemd sees an active service.
-
-Why a daemon thread instead of forking / subprocess?
-  - In-process: shares the gateway's venv / pydantic-core bindings with
-    no extra packaging.
-  - No double-fork: systemd service type=simple works cleanly.
-  - No separate virtualenv to maintain.
+alive.
 
 Usage:
-    hermes-nodes-server.service runs this directly via ExecStart.
-    Or for dev:  python scripts/run_server.py
+    python scripts/run_server.py
 """
 from __future__ import annotations
 
@@ -23,17 +16,24 @@ import signal
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 # ── paths ────────────────────────────────────────────────────────────────────
 
 HERMES_HOME = Path.home() / ".hermes"
 PLUGIN_DIR = HERMES_HOME / "plugins" / "hermes-nodes-plugin"
-VENV_PYTHON = HERMES_HOME / "hermes-agent" / "venv" / "bin" / "python"
 
-# Make sure the plugin is importable (it lives in PLUGIN_DIR)
-if str(PLUGIN_DIR) not in sys.path:
-    sys.path.insert(0, str(PLUGIN_DIR))
+# Register the hermes_nodes_plugin namespace in sys.modules so that
+# "from hermes_nodes_plugin.lifecycle import ..." works with flat layout.
+# This replicates what Hermes's _load_directory_module does when it
+# loads the plugin as hermes_plugins.hermes_nodes_plugin.
+_HERMES_PLUGINS_PARENT = "hermes_nodes_plugin"
+_plugin_ns = types.ModuleType(_HERMES_PLUGINS_PARENT)
+_plugin_ns.__path__ = [str(PLUGIN_DIR)]          # enables "from .X" relative imports
+_plugin_ns.__package__ = _HERMES_PLUGINS_PARENT   # __package__ = "hermes_nodes_plugin"
+_plugin_ns.__name__ = _HERMES_PLUGINS_PARENT
+sys.modules[_HERMES_PLUGINS_PARENT] = _plugin_ns
 
 # ── logging ──────────────────────────────────────────────────────────────────
 
