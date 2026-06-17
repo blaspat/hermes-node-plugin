@@ -6,7 +6,7 @@ from __future__ import annotations
 _STRING_PARAM: dict[str, str] = {"type": "string"}
 
 
-NODE_EXEC_SCHEMA: dict[str, str | dict] = {
+NODE_EXEC: dict[str, str | dict] = {
     "name": "node_exec",
     "description": (
         "Run a shell command on a paired remote node (e.g. a laptop with "
@@ -55,7 +55,7 @@ NODE_EXEC_SCHEMA: dict[str, str | dict] = {
 }
 
 
-NODE_READ_SCHEMA: dict[str, str | dict] = {
+NODE_READ: dict[str, str | dict] = {
     "name": "node_read",
     "description": (
         "Read a UTF-8 text file from a paired remote node. Returns the "
@@ -87,7 +87,7 @@ NODE_READ_SCHEMA: dict[str, str | dict] = {
 }
 
 
-NODE_WRITE_SCHEMA: dict[str, str | dict] = {
+NODE_WRITE: dict[str, str | dict] = {
     "name": "node_write",
     "description": (
         "Write UTF-8 text to a file on a paired remote node. By default "
@@ -131,7 +131,7 @@ NODE_WRITE_SCHEMA: dict[str, str | dict] = {
 }
 
 
-NODE_LIST_SCHEMA: dict[str, str | dict] = {
+NODE_LIST: dict[str, str | dict] = {
     "name": "node_list",
     "description": (
         "List all paired remote nodes that are currently connected to the "
@@ -152,8 +152,8 @@ NODE_LIST_SCHEMA: dict[str, str | dict] = {
 # Tool implementations live in tools.py. Schemas and handlers are wired
 # together in __init__.py via register_tool().
 SCHEMAS: dict[str, dict[str, str | dict]] = {
-    "node_exec": NODE_EXEC_SCHEMA,
-    "node_read": NODE_READ_SCHEMA,
-    "node_write": NODE_WRITE_SCHEMA,
-    "node_list": NODE_LIST_SCHEMA,
+    "node_exec": NODE_EXEC,
+    "node_read": NODE_READ,
+    "node_write": NODE_WRITE,
+    "node_list": NODE_LIST,
 }
