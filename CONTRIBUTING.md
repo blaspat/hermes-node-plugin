@@ -22,9 +22,6 @@ for getting changes reviewed and merged.
 ```bash
 git clone https://github.com/blaspat/hermes-nodes-plugin.git
 cd hermes-nodes-plugin
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -e ".[dev]"
 
 # Run the test suite
 pytest tests/ -v
