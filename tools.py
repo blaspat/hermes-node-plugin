@@ -149,13 +149,26 @@ def _node_list_impl(
     *,
     registry: "NodeRegistry | None" = None,
 ) -> str:
-    """List paired nodes with their current connection state."""
+    """List paired nodes with their current connection state.
+
+    Hits the HTTP /nodes/status endpoint rather than the in-process
+    registry so the tool works correctly when invoked from a subagent
+    process (whose _default_runner._registry is a fresh empty instance
+    separate from the parent gateway's running server registry).
+    """
     try:
-        reg = _resolve_registry(registry)
-        conns = asyncio.run(reg.list_connected())
+        from .config import load_config
+
+        cfg = load_config()
+        status_url = f"http://{cfg.host}:{cfg.port}/nodes/status"
+        import urllib.request
+
+        with urllib.request.urlopen(status_url, timeout=2.0) as resp:
+            data = json.loads(resp.read())
+        connected_names: set[str] = set(data.get("connected_names", []))
         return json.dumps({
-            "nodes": [_connection_summary(c) for c in conns],
-            "count": len(conns),
+            "nodes": [{"name": n, "state": "connected"} for n in connected_names],
+            "count": len(connected_names),
         })
     except Exception as e:
         return json.dumps({"error": f"node_list failed: {e}"})
