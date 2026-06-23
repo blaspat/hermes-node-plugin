@@ -22,15 +22,28 @@ Install the plugin:
  ```
 
 ## Core Features
-- `node_exec(target, command)`: run shell commands on a paired node.
-- `node_read(target, path)`: read a file on a paired node.
-- `node_write(target, path, content, mode="overwrite")`: write a file on a paired node.
+- `node_exec(target, command)`: run shell commands on a paired node (auto-retries on disconnect).
+- `node_read(target, path)`: read a file on a paired node (auto-retries on disconnect).
+- `node_write(target, path, content, mode="overwrite")`: write a file on a paired node (auto-retries on disconnect).
 - `node_list()`: list paired nodes and their connection state.
 
 ## Usage
 
 ### 1. Configure
 Edit `~/.hermes/hermes-nodes.yaml` with host/port/TLS settings.
+
+Optional retry settings (defaults shown):
+
+```yaml
+max_retries: 3
+retry_backoff_seconds: 2.0
+```
+
+Or via environment variables:
+- `HERMES_NODES_MAX_RETRIES` — number of retries on transient failures (default: `3`, set `0` to disable)
+- `HERMES_NODES_RETRY_BACKOFF_SECONDS` — initial backoff in seconds, doubles each attempt (default: `2.0`)
+
+The tools automatically retry on connection errors, server errors (5xx), and node-disconnected responses with exponential backoff (`backoff × 2^attempt`, capped at 30s).
 
 ### 2. Start the server
 
