@@ -214,6 +214,7 @@ class ServerRunner:
         if not uvicorn_config.loaded:
             uvicorn_config.load()
         self._server = uvicorn.Server(uvicorn_config)
+        self._server.lifespan = uvicorn_config.lifespan_class(uvicorn_config)
 
         async def _serve() -> None:
             try:
