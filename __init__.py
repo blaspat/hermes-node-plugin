@@ -11,6 +11,11 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
+# Module-level guard: prevent duplicate WSS auto-start when the plugin is
+# installed in multiple locations (e.g. global + profile).  The first
+# ``register()`` that runs sets this True; subsequent calls no-op.
+_auto_start_done = False
+
 def register(ctx) -> None:
     """Hermes plugin entry point.
 
@@ -164,6 +169,12 @@ def register(ctx) -> None:
                 _f.flush()
         except Exception:
             pass
+
+    global _auto_start_done
+    if _auto_start_done:
+        _log("auto-start already handled by another registration, skipping")
+        return
+    _auto_start_done = True
 
     _log("auto-start check running")
 
