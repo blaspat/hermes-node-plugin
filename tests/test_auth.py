@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import os
 import secrets
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 # --- Helpers ----------------------------------------------------------------
@@ -178,7 +175,7 @@ class TestToolsAuth:
     """Tests for tools.py reading the internal token."""
 
     def test_read_internal_token_returns_token(self, tmp_path: Path) -> None:
-        from hermes_node_plugin.tools import _INTERNAL_TOKEN_PATH, _read_internal_token
+        from hermes_node_plugin.tools import _read_internal_token
 
         token_path = tmp_path / "nodes-internal-token"
         token = "tok-abc123\n"
@@ -191,7 +188,7 @@ class TestToolsAuth:
     def test_read_internal_token_returns_none_when_missing(
         self, tmp_path: Path
     ) -> None:
-        from hermes_node_plugin.tools import _INTERNAL_TOKEN_PATH, _read_internal_token
+        from hermes_node_plugin.tools import _read_internal_token
 
         missing = tmp_path / "does-not-exist"
         with patch("hermes_node_plugin.tools._INTERNAL_TOKEN_PATH", missing):
@@ -211,7 +208,7 @@ class TestCreateApp:
 
         app = create_app()
         # Lifespan runs when TestClient enters the context manager
-        with TestClient(app) as client:
+        with TestClient(app):
             assert app.state.internal_token, "internal_token was not set"
             assert len(app.state.internal_token) >= 32, "token looks too short"
 
@@ -239,16 +236,15 @@ class TestWaiterCancelled:
 
     def test_exec_503_on_waiter_cancelled(self) -> None:
         """Verify the code path exists (static assertion via handler structure)."""
-        from hermes_node_plugin.wsserver.server import _verify_internal_auth
 
         # We can't easily trigger _WaiterCancelled from an ASGI test because
         # it requires a real WS connection. Instead, verify the _WaiterCancelled
         # import is valid and the handler mentions 503.
         import inspect
 
-        from hermes_node_plugin.registry import _WaiterCancelled
+        from hermes_node_plugin.registry import _WaiterCancelled  # noqa: F401
         from hermes_node_plugin.wsserver import server as server_mod
-
+        from hermes_node_plugin.wsserver.server import _verify_internal_auth  # noqa: F401
         source = inspect.getsource(server_mod)
         assert "503" in source, (
             "wsserver/server.py does not contain the string '503' — "
