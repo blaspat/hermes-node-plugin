@@ -26,12 +26,15 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install ruff
+          pip install -e .
+          pip install ruff pytest
       - name: Lint
         run: ruff check .
       - name: Check compile
         run: |
           python -m py_compile $(git ls-files '*.py')
+      - name: Test
+        run: python -m pytest tests/ -q --tb=short
 
   # ---------------------------------------------------------------------------
   # Release
