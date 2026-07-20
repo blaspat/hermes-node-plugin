@@ -170,6 +170,12 @@ def setup_node_cli(subparser: argparse.ArgumentParser) -> None:
         help="Show whether the WSS node server is running.",
     )
 
+    # --- restart -----------------------------------------------------------
+    subs.add_parser(
+        "restart",
+        help="Drain and restart the WSS server to pick up a new token.",
+    )
+
     subparser.set_defaults(func=node_command)
 
 
@@ -203,6 +209,8 @@ def node_command(args: argparse.Namespace) -> int:
             return _cmd_revoke(args)
         if action == "status":
             return _cmd_status()
+        if action == "restart":
+            return _cmd_restart()
     except TokenStoreError as exc:
         # FR-4.2: surface the operator error message verbatim. Most
         # common is the missing-Fernet-key case on a fresh install.
@@ -426,6 +434,49 @@ def _cmd_status(args: argparse.Namespace | None = None) -> int:
         return 0
     except (OSError, socket.timeout):
         print("hermes-node server: not running")
+        return 1
+
+
+def _cmd_restart(args: argparse.Namespace | None = None) -> int:
+    """POST /admin/restart to drain and restart the WSS server in-place.
+
+    The server re-reads the internal auth token from
+    ``~/.hermes/nodes-internal-token`` during restart, so manual token
+    edits take effect without restarting the gateway.
+    """
+    import httpx
+
+    config = load_config()
+    url = f"http://{config.connect_host}:{config.port}/admin/restart"
+
+    # Read the current token to authenticate.
+    from .tools import _read_internal_token
+
+    token = _read_internal_token()
+    if not token:
+        print("error: server not ready (no internal token found)", file=sys.stderr)
+        return 1
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(url, headers={"Authorization": f"Bearer {token}"})
+    except httpx.ConnectError:
+        print(
+            f"error: cannot reach server at {config.connect_host}:{config.port}",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if resp.status_code == 200:
+        data = resp.json()
+        print(f"restarted — listening on port {data.get('port')}")
+        return 0
+    else:
+        detail = resp.json().get("detail", resp.text)
+        print(f"error: {resp.status_code} — {detail}", file=sys.stderr)
         return 1
 
 

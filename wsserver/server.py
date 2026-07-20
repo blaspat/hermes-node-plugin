@@ -789,6 +789,37 @@ def create_app(
         except Exception as e:
             return {"status": "error", "code": 500, "reason": str(e)}
 
+    # -- Admin restart endpoint ------------------------------------------
+
+    @app.post("/admin/restart")
+    async def admin_restart(
+        _: None = Depends(_verify_internal_auth),
+    ) -> dict[str, Any]:
+        """Drain and restart the WSS server in-place.
+
+        Re-reads the internal auth token from disk, so manual edits to
+        ``~/.hermes/nodes-internal-token`` take effect without a full
+        gateway restart. WebSocket connections are closed during drain.
+        """
+        runner = getattr(app.state, "runner", None)
+        if runner is None:
+            raise HTTPException(
+                status_code=503, detail="Server runner not available"
+            )
+        if not runner.is_running:
+            raise HTTPException(
+                status_code=409, detail="Server is not running"
+            )
+        try:
+            await runner.drain(timeout=5.0)
+            await runner.start()
+        except Exception as exc:
+            logger.error("hermes-node: admin restart failed: %s", exc)
+            raise HTTPException(
+                status_code=500, detail=f"Restart failed: {exc}"
+            ) from exc
+        return {"status": "restarted", "port": runner.port}
+
     return app
 
 

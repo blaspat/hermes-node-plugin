@@ -268,42 +268,38 @@ class ServerRunner:
                 f"{self._config.port} within 5s"
             )
 
-        # Token setup: generate if we bound the port, read existing if
-        # another gateway already owns it. This must happen AFTER the
-        # bind-wait so we don't overwrite the token when the port is
-        # already occupied by the default gateway.
+        # Token setup: always read the existing file first so manual
+        # edits to the token are picked up on restart. Only generate a
+        # fresh token when the file is missing or empty AND we own the
+        # port (so we have the authority to mint new credentials).
         from .server import _ensure_internal_token, _internal_token_path
 
-        if self._server.started:
-            token_path = _internal_token_path()
+        token_path = _internal_token_path()
+        existing: str | None = None
+        try:
+            raw = token_path.read_text().strip()
+            if raw:
+                existing = raw.partition("\n")[0]
+        except (FileNotFoundError, OSError):
+            pass
+
+        if existing:
+            self._app.state.internal_token = existing
             logger.info(
-                "hermes-node: generating internal auth token at %s",
-                token_path,
+                "hermes-node: using existing token from %s", token_path
+            )
+        elif self._server.started:
+            logger.info(
+                "hermes-node: no token at %s — generating new one", token_path
             )
             self._app.state.internal_token = _ensure_internal_token()
             logger.info("hermes-node: internal auth token generated")
         else:
-            token_path = _internal_token_path()
-            try:
-                existing = token_path.read_text().strip().partition("\n")[0]
-                if existing:
-                    self._app.state.internal_token = existing
-                    logger.info(
-                        "hermes-node: using existing token from %s",
-                        token_path,
-                    )
-                else:
-                    logger.warning(
-                        "hermes-node: token file %s is empty — "
-                        "internal endpoints will return 503",
-                        token_path,
-                    )
-            except (FileNotFoundError, OSError):
-                logger.warning(
-                    "hermes-node: cannot read token from %s — "
-                    "internal endpoints will return 503",
-                    token_path,
-                )
+            logger.warning(
+                "hermes-node: no token at %s and port %d is occupied — "
+                "internal endpoints will return 503",
+                token_path, self._config.port,
+            )
 
         if not self._server.started and self._server.should_exit:
             # Server couldn't start (EADDRINUSE, etc.). Surface the
@@ -322,6 +318,10 @@ class ServerRunner:
             self._task = None
             self._server = None
             return
+
+        # Store the runner on the FastAPI app so the
+        # ``POST /admin/restart`` endpoint can drain + restart.
+        self._app.state.runner = self
 
         logger.info(
             "hermes-node WSS server listening on %s:%d",
