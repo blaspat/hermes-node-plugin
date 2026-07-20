@@ -217,9 +217,14 @@ class ServerRunner:
         # internal auth token via ASGI lifespan.startup, but we use
         # lifespan="off" (import-chain issues with "on" in this plugin
         # context). Generate the token directly instead.
-        from .server import _ensure_internal_token
+        from .server import _ensure_internal_token, _internal_token_path
 
+        token_path = _internal_token_path()
+        logger.info(
+            "hermes-node: generating internal auth token at %s", token_path
+        )
         self._app.state.internal_token = _ensure_internal_token()
+        logger.info("hermes-node: internal auth token generated")
 
         async def _serve() -> None:
             try:

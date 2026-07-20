@@ -177,20 +177,23 @@ def register(ctx) -> None:
 
             def _start_server() -> None:
                 import asyncio
-                import contextlib
 
+                log.info(
+                    "hermes-node-plugin: starting WSS server on port %d"
+                    " (background thread)",
+                    _check_port,
+                )
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    with contextlib.suppress(Exception):
-                        from .lifecycle import _on_session_start
+                    from .lifecycle import _on_session_start
 
-                        loop.run_until_complete(_on_session_start())
-                        log.info(
-                            "hermes-node-plugin: WSS server started on port %d"
-                            " (background thread)",
-                            _check_port,
-                        )
+                    loop.run_until_complete(_on_session_start())
+                    log.info(
+                        "hermes-node-plugin: WSS server started on port %d"
+                        " (background thread)",
+                        _check_port,
+                    )
                     # Keep the loop alive so uvicorn tasks continue running.
                     loop.run_forever()
                 except Exception as exc:
