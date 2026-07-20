@@ -348,10 +348,7 @@ def _node_list_impl(
 
         cfg = load_config()
         status_url = f"http://{cfg.connect_host}:{cfg.port}/nodes"
-        import urllib.request
-
-        with urllib.request.urlopen(status_url, timeout=2.0) as resp:
-            data = json.loads(resp.read())
+        data = _request_with_retry("GET", status_url, timeout=2.0)
         connected: list[dict[str, Any]] = data.get("nodes", [])
         return json.dumps({
             "nodes": connected,

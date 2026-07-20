@@ -44,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from ..config import NodeServerConfig
 from ..errors import TokenStoreError
 from ..ratelimit import _RateLimiter
-from ..registry import NodeConnection, NodeRegistry
+from ..registry import NodeConnection, NodeRegistry, _WaiterCancelled
 from ..tokens import TokenStore, token_store_from_config
 from .handlers import route_inbound
 
@@ -54,11 +54,11 @@ logger = logging.getLogger(__name__)
 CLOSE_AUTH_FAILED = 4001
 CLOSE_PROTOCOL_VERSION = 4002
 CLOSE_MESSAGE_OUT_OF_ORDER = 4003
-# 4004 is "Rate limit exceeded" in PROTOCOL §4. Reused for
-# handshake-timeout on the rationale that a parked connection
-# is itself a form of resource exhaustion.
 CLOSE_RATE_LIMIT_EXCEEDED = 4004
-CLOSE_HANDSHAKE_TIMEOUT = 4004
+# 4005 is unassigned in PROTOCOL §4; allocated here for handshake-timeout
+# so clients can distinguish it from rate-limit disconnects by close code
+# alone (e.g. when the error frame is lost).
+CLOSE_HANDSHAKE_TIMEOUT = 4005
 
 # Field caps for Pydantic models (issue #14, DoS hardening).
 MAX_NODE_NAME_LEN = 64
@@ -249,12 +249,14 @@ class _ExecRequest(BaseModel):
 
 class _ReadRequest(BaseModel):
     path: str
+    timeout_ms: int | None = None
 
 
 class _WriteRequest(BaseModel):
     path: str
     content: str
     mode: str = "overwrite"
+    timeout_ms: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +580,13 @@ def create_app(
         try:
             result = await asyncio.wait_for(future, timeout=timeout_ms / 1000.0)
             return {"status": "ok", "exec_result": result}
+        except _WaiterCancelled as wc:
+            await registry.unregister_waiter(node_name, request_id)
+            return {
+                "status": "error",
+                "code": 503,
+                "reason": f"node disconnected mid-call: {wc}",
+            }
         except asyncio.TimeoutError:
             await registry.unregister_waiter(node_name, request_id)
             return {
@@ -600,7 +609,7 @@ def create_app(
             }
 
         request_id = str(uuid.uuid4())
-        timeout_ms = 30_000
+        timeout_ms = body.timeout_ms or 30_000
         try:
             future = await registry.register_waiter(node_name, request_id)
         except Exception as e:
@@ -625,6 +634,13 @@ def create_app(
         try:
             result = await asyncio.wait_for(future, timeout=timeout_ms / 1000.0)
             return {"status": "ok", "read_result": result}
+        except _WaiterCancelled as wc:
+            await registry.unregister_waiter(node_name, request_id)
+            return {
+                "status": "error",
+                "code": 503,
+                "reason": f"node disconnected mid-call: {wc}",
+            }
         except asyncio.TimeoutError:
             await registry.unregister_waiter(node_name, request_id)
             return {
@@ -647,7 +663,7 @@ def create_app(
             }
 
         request_id = str(uuid.uuid4())
-        timeout_ms = 30_000
+        timeout_ms = body.timeout_ms or 30_000
         try:
             future = await registry.register_waiter(node_name, request_id)
         except Exception as e:
@@ -681,6 +697,13 @@ def create_app(
         try:
             result = await asyncio.wait_for(future, timeout=timeout_ms / 1000.0)
             return {"status": "ok", "write_result": result}
+        except _WaiterCancelled as wc:
+            await registry.unregister_waiter(node_name, request_id)
+            return {
+                "status": "error",
+                "code": 503,
+                "reason": f"node disconnected mid-call: {wc}",
+            }
         except asyncio.TimeoutError:
             await registry.unregister_waiter(node_name, request_id)
             return {
