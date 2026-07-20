@@ -457,15 +457,22 @@ class NodeRegistry:
 
     def __len__(self) -> int:
         # Synchronous convenience for tests / debug printing. Not part
-        # of the public API; using the unsynchronised ``len`` of the
-        # dict is fine because CPython dict reads are atomic and the
-        # only mutation paths are coroutines running on the same loop.
+        # of the public API. Reads without the async lock: CPython dict
+        # reads are atomic under the GIL, so this is a *best-effort
+        # snapshot* — accurate only when no concurrent mutation is in
+        # flight. Do not use for security- or correctness-critical
+        # decisions; await the corresponding async accessor instead.
         return len(self._connections)
 
     def __contains__(self, name: object) -> bool:
+        # See __len__ note: best-effort snapshot, not lock-safe.
         return name in self._connections
 
     def __iter__(self) -> Iterable[str]:
+        # See __len__ note: best-effort snapshot, not lock-safe.
+        # The dict may be mutated between tuple() construction and the
+        # caller's first next(); iterate promptly and do not rely on the
+        # snapshot being consistent with subsequent registry state.
         return iter(tuple(self._connections))
 
 

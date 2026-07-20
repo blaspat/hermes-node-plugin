@@ -663,11 +663,15 @@ def _generate_token() -> str:
 def _hash_token(token: str) -> str:
     """SHA-256 hex digest of the token. We never store the token itself.
 
-    SHA-256 (not HMAC) is fine here because the token already has
-    256 bits of entropy from :func:`secrets.token_urlsafe` — the
-    attacker can't precompute a rainbow table. SHA-256 is faster than
-    HMAC-SHA256, and we only call it on the auth path (latency-
-    sensitive).
+    SHA-256 (not HMAC) is fine here *as long as* tokens continue to
+    carry 256 bits of entropy from :func:`secrets.token_urlsafe` —
+    the attacker can't precompute a rainbow table over 2^256 inputs,
+    so a keyed hash buys nothing.
+
+    If that ever changes (shorter tokens, human-chosen tokens, a
+    different generator with weaker entropy), this MUST switch to
+    ``hmac.new(key=server_secret, msg=token, digestmod='sha256')``
+    to prevent offline brute-force against a leaked token file.
     """
     import hashlib
 
