@@ -462,7 +462,7 @@ def _connected_names() -> set[str]:
 
     The registry is owned by the long-running server; the CLI
     command is a short-lived process. We query the server's HTTP
-    status endpoint at ``/nodes/status`` rather than maintaining
+    status endpoint at ``/nodes`` rather than maintaining
     our own in-process registry — the CLI's registry would be
     a fresh empty one that never saw any connections.
 
@@ -476,11 +476,19 @@ def _connected_names() -> set[str]:
     base_url = f"http://{config.connect_host}:{config.port}"
     status_url = f"{base_url}/nodes"
     try:
+        from .tools import _read_internal_token
+
+        token = _read_internal_token()
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
         import urllib.request
-        with urllib.request.urlopen(status_url, timeout=2.0) as resp:
+
+        req = urllib.request.Request(status_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = __import__("json").loads(resp.read())
-            return {
-                n["name"] for n in data.get("nodes", [])}
+            return {n["name"] for n in data.get("nodes", [])}
     except Exception:
         return set()
 
