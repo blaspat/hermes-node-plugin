@@ -149,19 +149,32 @@ def register(ctx) -> None:
     # Disabled in test/CI environments by setting the env var to ``0``.
 
     import os
+    import datetime as _datetime
+
+    _LOG_DIR = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+    _LOG_FILE = os.path.join(_LOG_DIR, "hermes-node-plugin.log")
+
+    def _log(msg: str) -> None:
+        ts = _datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{ts}] {msg}"
+        print(line, flush=True)
+        try:
+            with open(_LOG_FILE, "a") as _f:
+                _f.write(line + "\n")
+                _f.flush()
+        except Exception:
+            pass
+
+    _log("auto-start check running")
 
     if os.environ.get("HERMES_NODES_AUTO_START", "1") == "1":
-        print("hermes-node-plugin: auto-start check running", flush=True)
         # Load config to get the actual port for the socket check.
         from .config import load_config
 
         cfg = load_config()
         _check_host = cfg.connect_host
         _check_port = cfg.port
-        print(
-            f"hermes-node-plugin: config loaded host={_check_host} port={_check_port}",
-            flush=True,
-        )
+        _log(f"config loaded host={_check_host} port={_check_port}")
 
         # Quick socket check: if the configured port is already bound,
         # the server is already running (e.g. from a previous gateway
@@ -175,46 +188,33 @@ def register(ctx) -> None:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((_check_host, _check_port))
             s.close()
-            print(
-                f"hermes-node-plugin: port {_check_port} is free, will start server",
-                flush=True,
-            )
+            _log(f"port {_check_port} is free, will start server")
         except OSError as e:
             _port_free = False
-            print(
-                f"hermes-node-plugin: port {_check_port} is in use ({e}), skipping",
-                flush=True,
-            )
+            _log(f"port {_check_port} is in use ({e}), skipping")
 
         if _port_free:
 
             def _start_server() -> None:
                 import asyncio
 
-                print(
-                    f"hermes-node-plugin: _start_server thread running on port {_check_port}",
-                    flush=True,
-                )
+                _log(f"_start_server thread running on port {_check_port}")
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
                     from .lifecycle import _on_session_start
 
                     loop.run_until_complete(_on_session_start())
-                    print(
-                        f"hermes-node-plugin: WSS server started on port {_check_port}",
-                        flush=True,
-                    )
+                    _log(f"WSS server started on port {_check_port}")
                     # Keep the loop alive so uvicorn tasks continue running.
                     loop.run_forever()
                 except Exception as exc:
-                    print(
-                        f"hermes-node-plugin: server background thread failed: {exc}",
-                        flush=True,
-                    )
+                    _log(f"server background thread failed: {exc}")
                     import traceback
-                    traceback.print_exc()
+
+                    _log(traceback.format_exc())
                 finally:
+                    _log("event loop closed")
                     loop.close()
 
             try:
@@ -224,16 +224,10 @@ def register(ctx) -> None:
                     target=_start_server, daemon=True, name="hermes-node-wss"
                 )
                 t.start()
-                print("hermes-node-plugin: daemon thread started", flush=True)
+                _log("daemon thread started")
             except Exception as exc:
-                print(
-                    f"hermes-node-plugin: could not start server thread: {exc}",
-                    flush=True,
-                )
+                _log(f"could not start server thread: {exc}")
         else:
-            print(
-                f"hermes-node-plugin: port {_check_port} already bound — skipping",
-                flush=True,
-            )
+            _log(f"port {_check_port} already bound — skipping")
     else:
-        print("hermes-node-plugin: auto-start disabled (HERMES_NODES_AUTO_START=0)", flush=True)
+        _log("auto-start disabled (HERMES_NODES_AUTO_START=0)")
