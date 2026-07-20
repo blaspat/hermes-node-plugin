@@ -33,7 +33,8 @@ class TestInternalToken:
 
         token_path = tmp_path / ".hermes" / "nodes-internal-token"
         with patch(
-            "hermes_node_plugin.wsserver.server._INTERNAL_TOKEN_PATH", token_path
+            "hermes_node_plugin.wsserver.server._internal_token_path",
+            return_value=token_path,
         ):
             token = _ensure_internal_token()
             assert token_path.exists(), "token file was not created"
@@ -48,7 +49,8 @@ class TestInternalToken:
 
         token_path = tmp_path / "nodes-internal-token"
         with patch(
-            "hermes_node_plugin.wsserver.server._INTERNAL_TOKEN_PATH", token_path
+            "hermes_node_plugin.wsserver.server._internal_token_path",
+            return_value=token_path,
         ):
             t1 = _ensure_internal_token()
             t2 = _ensure_internal_token()
@@ -181,7 +183,10 @@ class TestToolsAuth:
         token = "tok-abc123\n"
         token_path.write_text(token)
 
-        with patch("hermes_node_plugin.tools._INTERNAL_TOKEN_PATH", token_path):
+        with patch(
+            "hermes_node_plugin.tools._internal_token_path",
+            return_value=token_path,
+        ):
             result = _read_internal_token()
             assert result == "tok-abc123"
 
@@ -191,7 +196,10 @@ class TestToolsAuth:
         from hermes_node_plugin.tools import _read_internal_token
 
         missing = tmp_path / "does-not-exist"
-        with patch("hermes_node_plugin.tools._INTERNAL_TOKEN_PATH", missing):
+        with patch(
+            "hermes_node_plugin.tools._internal_token_path",
+            return_value=missing,
+        ):
             assert _read_internal_token() is None
 
 
@@ -254,14 +262,15 @@ class TestWaiterCancelled:
     def test_nodes_status_lifespan_token_integration(self) -> None:
         """End-to-end: server starts, token file exists, auth works."""
         from hermes_node_plugin.wsserver.server import (
-            _INTERNAL_TOKEN_PATH,
+            _internal_token_path,
             create_app,
         )
 
         app = create_app()
         with TestClient(app):
             expected = app.state.internal_token
-            stored = _INTERNAL_TOKEN_PATH.read_text().strip()
+            path = _internal_token_path()
+            stored = path.read_text().strip()
             assert stored == expected, (
                 "token written to file does not match app.state.internal_token"
             )
