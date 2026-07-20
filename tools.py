@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 
 from pathlib import Path
@@ -70,16 +71,23 @@ def _read_internal_token() -> str | None:
     Returns ``None`` when the file doesn't exist (server hasn't started,
     or running in a test without a server process).
     """
-    path = _INTERNAL_TOKEN_PATH
+    path = _internal_token_path()
     try:
         return path.read_text().strip().partition("\n")[0]
     except (FileNotFoundError, OSError):
         return None
 
 
-#: Path to the internal auth token file (same as wsserver/server.py).
-#: Shared between server (writer) and tools.py (reader) via disk.
-_INTERNAL_TOKEN_PATH = Path.home() / ".hermes" / "nodes-internal-token"
+def _internal_token_path() -> Path:
+    """Return the path for the internal auth token file.
+
+    Uses HERMES_HOME if set (profile-scoped), otherwise falls back to
+    ~/.hermes/nodes-internal-token. Must match wsserver/server.py.
+    """
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        return Path(hermes_home) / "nodes-internal-token"
+    return Path.home() / ".hermes" / "nodes-internal-token"
 
 
 def _request_with_retry(
