@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 
 from pathlib import Path
@@ -81,12 +80,9 @@ def _read_internal_token() -> str | None:
 def _internal_token_path() -> Path:
     """Return the path for the internal auth token file.
 
-    Uses HERMES_HOME if set (profile-scoped), otherwise falls back to
-    ~/.hermes/nodes-internal-token. Must match wsserver/server.py.
+    Always uses the shared path ``~/.hermes/nodes-internal-token``.
+    Must match wsserver/server.py.
     """
-    hermes_home = os.environ.get("HERMES_HOME")
-    if hermes_home:
-        return Path(hermes_home) / "nodes-internal-token"
     return Path.home() / ".hermes" / "nodes-internal-token"
 
 

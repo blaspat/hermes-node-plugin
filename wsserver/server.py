@@ -84,14 +84,10 @@ PROTOCOL_MAJOR = 0
 def _internal_token_path() -> Path:
     """Return the path for the internal auth token file.
 
-    Uses HERMES_HOME if set (profile-scoped), otherwise falls back to
-    ~/.hermes/nodes-internal-token (shared). This prevents one profile's
-    WSS server from overwriting another profile's token when two gateway
-    processes run side by side.
+    Always uses the shared path ``~/.hermes/nodes-internal-token``.
+    All profiles share the same token — the default gateway owns the
+    WSS server and generates the token; other profiles read it.
     """
-    hermes_home = os.environ.get("HERMES_HOME")
-    if hermes_home:
-        return Path(hermes_home) / "nodes-internal-token"
     return Path.home() / ".hermes" / "nodes-internal-token"
 
 
