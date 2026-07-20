@@ -213,18 +213,10 @@ class ServerRunner:
         self._server = uvicorn.Server(uvicorn_config)
         self._server.lifespan = uvicorn_config.lifespan_class(uvicorn_config)
 
-        # The FastAPI app's lifespan handler normally generates the
-        # internal auth token via ASGI lifespan.startup, but we use
-        # lifespan="off" (import-chain issues with "on" in this plugin
-        # context). Generate the token directly instead.
-        from .server import _ensure_internal_token, _internal_token_path
-
-        token_path = _internal_token_path()
-        logger.info(
-            "hermes-node: generating internal auth token at %s", token_path
-        )
-        self._app.state.internal_token = _ensure_internal_token()
-        logger.info("hermes-node: internal auth token generated")
+        # Token generation is deferred until AFTER the bind succeeds.
+        # If we're the first to bind (default gateway), we generate a
+        # fresh token. If the port is already occupied (kate profile),
+        # we read the existing shared token — we must NOT overwrite it.
 
         async def _serve() -> None:
             try:
@@ -275,6 +267,43 @@ class ServerRunner:
                 f"hermes-node server failed to bind {self._config.host}:"
                 f"{self._config.port} within 5s"
             )
+
+        # Token setup: generate if we bound the port, read existing if
+        # another gateway already owns it. This must happen AFTER the
+        # bind-wait so we don't overwrite the token when the port is
+        # already occupied by the default gateway.
+        from .server import _ensure_internal_token, _internal_token_path
+
+        if self._server.started:
+            token_path = _internal_token_path()
+            logger.info(
+                "hermes-node: generating internal auth token at %s",
+                token_path,
+            )
+            self._app.state.internal_token = _ensure_internal_token()
+            logger.info("hermes-node: internal auth token generated")
+        else:
+            token_path = _internal_token_path()
+            try:
+                existing = token_path.read_text().strip().partition("\n")[0]
+                if existing:
+                    self._app.state.internal_token = existing
+                    logger.info(
+                        "hermes-node: using existing token from %s",
+                        token_path,
+                    )
+                else:
+                    logger.warning(
+                        "hermes-node: token file %s is empty — "
+                        "internal endpoints will return 503",
+                        token_path,
+                    )
+            except (FileNotFoundError, OSError):
+                logger.warning(
+                    "hermes-node: cannot read token from %s — "
+                    "internal endpoints will return 503",
+                    token_path,
+                )
 
         if not self._server.started and self._server.should_exit:
             # Server couldn't start (EADDRINUSE, etc.). Surface the
