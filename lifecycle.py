@@ -197,28 +197,23 @@ class ServerRunner:
                 "ssl_keyfile": self._config.tls_key_path,
             }
 
-        # ``lifespan="off"`` is correct here: our FastAPI app has no
-        # lifespan events. We drive uvicorn's three lifecycle
-        # coroutines (``startup`` / ``main_loop`` / ``shutdown``)
-        # directly instead of calling :meth:`Server.serve` because
-        # ``serve`` wraps them in :meth:`capture_signals` — the
-        # gateway already owns SIGINT/SIGTERM, and a second handler
-        # layer would race with the gateway's own drain logic.
-        # ``Server._serve`` (uvicorn's internal helper) installs the
-        # lifespan object *before* calling ``startup``; the property
-        # is only available after ``Config.load()`` returns.
+        # ``lifespan="on"`` so the FastAPI ``create_app`` lifespan handler
+        # runs on startup — it generates the internal auth token that
+        # tools.py uses to authenticate on /nodes and other HTTP endpoints.
+        # The old ``lifespan="off"`` predated the internal-auth change and
+        # silently skipped token generation (app.state.internal_token was
+        # always None → 503 on every tool call).
         uvicorn_config = uvicorn.Config(
             self._app,  # type: ignore[arg-type]
             host=self._config.host,
             port=self._config.port,
             log_level="warning",
-            lifespan="off",
+            lifespan="on",
             **ssl_kwargs,
         )
         if not uvicorn_config.loaded:
             uvicorn_config.load()
         self._server = uvicorn.Server(uvicorn_config)
-        self._server.lifespan = uvicorn_config.lifespan_class(uvicorn_config)
 
         async def _serve() -> None:
             try:
