@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-node-plugin"
+version = "0.1.0"
+description = "Hermes Agent plugin: WSS node server for distributed edge node execution"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=42",
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "pyyaml>=6",
+    "uvicorn>=0.27",
+    "websockets>=12",
+]
+
+[tool.setuptools]
+packages = ["hermes_node_plugin", "hermes_node_plugin.wsserver"]
+
+[tool.setuptools.package-dir]
+"hermes_node_plugin" = "."
+"hermes_node_plugin.wsserver" = "wsserver"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

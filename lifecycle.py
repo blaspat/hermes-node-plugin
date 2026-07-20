@@ -393,6 +393,21 @@ class ServerRunner:
                 for conn in candidates:
                     if self._stop_sweep.is_set():
                         break
+                    # Sentinel check: if the node disconnected and reconnected
+                    # between ``stale()`` and now, the registry holds a NEW
+                    # connection under the same name with a different
+                    # session_id. Closing the websocket from our snapshot
+                    # would tear down the healthy replacement session. Verify
+                    # the registry still points at THIS session before close.
+                    current = await self._registry.get(conn.name)
+                    if current is None or current.session_id != conn.session_id:
+                        logger.debug(
+                            "hermes-node stale sweep: skipping %r — "
+                            "session replaced (snapshot session_id=%r)",
+                            conn.name,
+                            conn.session_id,
+                        )
+                        continue
                     try:
                         # ``_safe_close`` swallows "already closed"
                         # errors so we don't double-log on a socket

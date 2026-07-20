@@ -57,8 +57,7 @@
   "duration_ms": 1234,
   "exit_code": 0,
   "status": "ok" | "error" | "timeout" | "denied",
-  "error": "path_not_allowed",
-  "command_summary": "pytest tests/ -q"   // exec only, first 200 chars
+  "error": "path_not_allowed"
 }
 ```
 

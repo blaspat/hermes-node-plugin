@@ -23,9 +23,15 @@ import json
 import logging
 import time
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
+
+# Limits previously imported from the deleted environment.py module.
+# Inline them here so environment.py can be removed outright.
+DEFAULT_EXEC_TIMEOUT_SECONDS = 60.0
+MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MiB
 
 if TYPE_CHECKING:
     from .registry import NodeConnection, NodeRegistry
@@ -58,6 +64,24 @@ def _should_retry(status_code: int, reason: str = "") -> bool:
     return False
 
 
+def _read_internal_token() -> str | None:
+    """Read the server's internal auth token from disk.
+
+    Returns ``None`` when the file doesn't exist (server hasn't started,
+    or running in a test without a server process).
+    """
+    path = _INTERNAL_TOKEN_PATH
+    try:
+        return path.read_text().strip().partition("\n")[0]
+    except (FileNotFoundError, OSError):
+        return None
+
+
+#: Path to the internal auth token file (same as wsserver/server.py).
+#: Shared between server (writer) and tools.py (reader) via disk.
+_INTERNAL_TOKEN_PATH = Path.home() / ".hermes" / "nodes-internal-token"
+
+
 def _request_with_retry(
     method: str,
     url: str,
@@ -70,8 +94,16 @@ def _request_with_retry(
     Retries up to ``max_retries`` times when the server is unreachable
     or returns a transient error. Between retries, sleeps
     ``backoff * 2^attempt`` seconds (capped at 30s).
+
+    Automatically attaches the internal auth token header so callers
+    don't need to manage it.
     """
     import httpx
+
+    headers: dict[str, str] = {}
+    token = _read_internal_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     max_retries, backoff = _retry_config()
     last_error: Exception | None = None
@@ -83,9 +115,9 @@ def _request_with_retry(
         try:
             with httpx.Client(timeout=timeout) as client:
                 if method == "POST":
-                    resp = client.post(url, json=json_body)
+                    resp = client.post(url, json=json_body, headers=headers)
                 else:
-                    resp = client.get(url)
+                    resp = client.get(url, headers=headers)
                 result = resp.json()
         except Exception as e:
             last_error = e
@@ -149,7 +181,6 @@ def _node_exec_impl(
         return json.dumps({"error": "node_exec: command must be a non-empty string"})
 
     from .config import load_config
-    from .environment import DEFAULT_EXEC_TIMEOUT_SECONDS
 
     cfg = load_config()
     timeout_s = (
@@ -211,7 +242,6 @@ def _node_read_impl(
     if not path:
         return json.dumps({"error": "node_read: path must be a non-empty string"})
 
-    from .environment import DEFAULT_EXEC_TIMEOUT_SECONDS
     from .config import load_config
 
     timeout_s = (
@@ -273,7 +303,6 @@ def _node_write_impl(
     if not path:
         return json.dumps({"error": "node_write: path must be a non-empty string"})
 
-    from .environment import DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_FILE_BYTES
     from .config import load_config
 
     timeout_s = (
@@ -348,10 +377,7 @@ def _node_list_impl(
 
         cfg = load_config()
         status_url = f"http://{cfg.connect_host}:{cfg.port}/nodes"
-        import urllib.request
-
-        with urllib.request.urlopen(status_url, timeout=2.0) as resp:
-            data = json.loads(resp.read())
+        data = _request_with_retry("GET", status_url, timeout=2.0)
         connected: list[dict[str, Any]] = data.get("nodes", [])
         return json.dumps({
             "nodes": connected,
