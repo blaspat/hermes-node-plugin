@@ -151,12 +151,17 @@ def register(ctx) -> None:
     import os
 
     if os.environ.get("HERMES_NODES_AUTO_START", "1") == "1":
+        print("hermes-node-plugin: auto-start check running", flush=True)
         # Load config to get the actual port for the socket check.
         from .config import load_config
 
         cfg = load_config()
         _check_host = cfg.connect_host
         _check_port = cfg.port
+        print(
+            f"hermes-node-plugin: config loaded host={_check_host} port={_check_port}",
+            flush=True,
+        )
 
         # Quick socket check: if the configured port is already bound,
         # the server is already running (e.g. from a previous gateway
@@ -170,18 +175,25 @@ def register(ctx) -> None:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((_check_host, _check_port))
             s.close()
-        except OSError:
+            print(
+                f"hermes-node-plugin: port {_check_port} is free, will start server",
+                flush=True,
+            )
+        except OSError as e:
             _port_free = False
+            print(
+                f"hermes-node-plugin: port {_check_port} is in use ({e}), skipping",
+                flush=True,
+            )
 
         if _port_free:
 
             def _start_server() -> None:
                 import asyncio
 
-                log.info(
-                    "hermes-node-plugin: starting WSS server on port %d"
-                    " (background thread)",
-                    _check_port,
+                print(
+                    f"hermes-node-plugin: _start_server thread running on port {_check_port}",
+                    flush=True,
                 )
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -189,18 +201,19 @@ def register(ctx) -> None:
                     from .lifecycle import _on_session_start
 
                     loop.run_until_complete(_on_session_start())
-                    log.info(
-                        "hermes-node-plugin: WSS server started on port %d"
-                        " (background thread)",
-                        _check_port,
+                    print(
+                        f"hermes-node-plugin: WSS server started on port {_check_port}",
+                        flush=True,
                     )
                     # Keep the loop alive so uvicorn tasks continue running.
                     loop.run_forever()
                 except Exception as exc:
-                    log.warning(
-                        "hermes-node-plugin: server background thread failed: %s",
-                        exc,
+                    print(
+                        f"hermes-node-plugin: server background thread failed: {exc}",
+                        flush=True,
                     )
+                    import traceback
+                    traceback.print_exc()
                 finally:
                     loop.close()
 
@@ -211,17 +224,16 @@ def register(ctx) -> None:
                     target=_start_server, daemon=True, name="hermes-node-wss"
                 )
                 t.start()
+                print("hermes-node-plugin: daemon thread started", flush=True)
             except Exception as exc:
-                log.warning(
-                    "hermes-node-plugin: could not start server thread: %s", exc
+                print(
+                    f"hermes-node-plugin: could not start server thread: {exc}",
+                    flush=True,
                 )
         else:
-            log.debug(
-                "hermes-node-plugin: port %d already bound — "
-                "server likely already running. Skipping auto-start.",
-                _check_port,
+            print(
+                f"hermes-node-plugin: port {_check_port} already bound — skipping",
+                flush=True,
             )
     else:
-        log.debug(
-            "hermes-node-plugin: auto-start disabled (HERMES_NODES_AUTO_START=0)"
-        )
+        print("hermes-node-plugin: auto-start disabled (HERMES_NODES_AUTO_START=0)", flush=True)
