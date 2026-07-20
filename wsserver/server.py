@@ -81,16 +81,26 @@ PROTOCOL_MAJOR = 0
 
 # -- Internal endpoint auth (option B) ---------------------------------
 # Secret shared between the server and tools.py via a file on disk.
-# The server generates it at startup; tools.py reads it per-call.
-# No user config surface, auto-rotates on restart.
-_INTERNAL_TOKEN_PATH = Path.home() / ".hermes" / "nodes-internal-token"
+def _internal_token_path() -> Path:
+    """Return the path for the internal auth token file.
+
+    Uses HERMES_HOME if set (profile-scoped), otherwise falls back to
+    ~/.hermes/nodes-internal-token (shared). This prevents one profile's
+    WSS server from overwriting another profile's token when two gateway
+    processes run side by side.
+    """
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        return Path(hermes_home) / "nodes-internal-token"
+    return Path.home() / ".hermes" / "nodes-internal-token"
 
 
 def _ensure_internal_token() -> str:
     """Generate a fresh internal auth token, write it to disk (mode 0600)."""
     token = secrets.token_hex(32)
-    _INTERNAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(_INTERNAL_TOKEN_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
+    path = _internal_token_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
     try:
         os.write(fd, token.encode("utf-8"))
         with open(fd, "wb", closefd=False) as f:  # noqa: SIM115
