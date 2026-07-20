@@ -20,6 +20,8 @@ from .wsserver.server import (
     CLOSE_PROTOCOL_VERSION,
     CLOSE_RATE_LIMIT_EXCEEDED,
     PROTOCOL_MAJOR,
+    _ensure_internal_token,
+    _internal_token_path,
     create_app,
     run_server,
 )
@@ -33,5 +35,7 @@ __all__ = [
     "CLOSE_MESSAGE_OUT_OF_ORDER",
     "CLOSE_RATE_LIMIT_EXCEEDED",
     "PROTOCOL_MAJOR",
+    "_ensure_internal_token",
+    "_internal_token_path",
     "_safe_close",
 ]
