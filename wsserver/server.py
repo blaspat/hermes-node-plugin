@@ -428,7 +428,12 @@ def create_app(
 
         is_valid = False
         try:
-            is_valid = token_store.validate(auth.node_name, auth.token)
+            # tokens.validate() does a full read-decrypt-write cycle with
+            # os.fsync on the token store. That blocks the event loop if
+            # called directly from async code. Push it to a thread.
+            is_valid = await asyncio.to_thread(
+                token_store.validate, auth.node_name, auth.token
+            )
         except TokenStoreError as exc:
             logging.getLogger(__name__).error(
                 "token store error during auth: %s", exc

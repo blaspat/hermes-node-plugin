@@ -27,6 +27,11 @@ from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
 
+# Limits previously imported from the deleted environment.py module.
+# Inline them here so environment.py can be removed outright.
+DEFAULT_EXEC_TIMEOUT_SECONDS = 60.0
+MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MiB
+
 if TYPE_CHECKING:
     from .registry import NodeConnection, NodeRegistry
 
@@ -149,7 +154,6 @@ def _node_exec_impl(
         return json.dumps({"error": "node_exec: command must be a non-empty string"})
 
     from .config import load_config
-    from .environment import DEFAULT_EXEC_TIMEOUT_SECONDS
 
     cfg = load_config()
     timeout_s = (
@@ -211,7 +215,6 @@ def _node_read_impl(
     if not path:
         return json.dumps({"error": "node_read: path must be a non-empty string"})
 
-    from .environment import DEFAULT_EXEC_TIMEOUT_SECONDS
     from .config import load_config
 
     timeout_s = (
@@ -273,7 +276,6 @@ def _node_write_impl(
     if not path:
         return json.dumps({"error": "node_write: path must be a non-empty string"})
 
-    from .environment import DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_FILE_BYTES
     from .config import load_config
 
     timeout_s = (
