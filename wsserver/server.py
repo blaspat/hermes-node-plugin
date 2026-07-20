@@ -33,12 +33,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import secrets
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ..config import NodeServerConfig
@@ -73,6 +78,43 @@ MAX_TS_LEN = 32
 
 # Protocol version — accept any minor at the same major (PROTOCOL §5).
 PROTOCOL_MAJOR = 0
+
+# -- Internal endpoint auth (option B) ---------------------------------
+# Secret shared between the server and tools.py via a file on disk.
+# The server generates it at startup; tools.py reads it per-call.
+# No user config surface, auto-rotates on restart.
+_INTERNAL_TOKEN_PATH = Path.home() / ".hermes" / "nodes-internal-token"
+
+
+def _ensure_internal_token() -> str:
+    """Generate a fresh internal auth token, write it to disk (mode 0600)."""
+    token = secrets.token_hex(32)
+    _INTERNAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(_INTERNAL_TOKEN_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
+    try:
+        os.write(fd, token.encode("utf-8"))
+        with open(fd, "wb", closefd=False) as f:  # noqa: SIM115
+            f.write(b"\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return token
+
+
+async def _verify_internal_auth(request: Request) -> None:
+    """FastAPI dependency that guards internal HTTP endpoints.
+
+    Checks ``Authorization: Bearer <token>`` against the token the
+    server generated at startup. Returns 401/503 if missing or wrong.
+    """
+    expected: str | None = getattr(request.app.state, "internal_token", None)
+    if expected is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
+    if auth_header.removeprefix("Bearer ") != expected:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +350,13 @@ def create_app(
             clock=clock,
         )
 
-    app = FastAPI(title="hermes-node WSS server")
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Startup: generate the internal auth token shared with tools.py."""
+        app.state.internal_token = _ensure_internal_token()
+        yield
+
+    app = FastAPI(title="hermes-node WSS server", lifespan=_lifespan)
     app.state.token_store = token_store
     app.state.registry = registry
     app.state.config = config
@@ -508,7 +556,9 @@ def create_app(
 
     # -- Status endpoint ---------------------------------------------------
     @app.get("/nodes")
-    async def nodes_status() -> dict[str, Any]:
+    async def nodes_status(
+        _: None = Depends(_verify_internal_auth),
+    ) -> dict[str, Any]:
         """List all currently-connected nodes with their metadata.
 
         GET /nodes  →  list of connected node info
@@ -531,7 +581,9 @@ def create_app(
         }
 
     @app.get("/nodes/status")
-    async def server_status() -> dict[str, Any]:
+    async def server_status(
+        _: None = Depends(_verify_internal_auth),
+    ) -> dict[str, Any]:
         """Simple server liveness + count check (used by hermes node status CLI)."""
         connected = await registry.list_connected()
         return {
@@ -542,7 +594,11 @@ def create_app(
 
     # -- Internal exec endpoint --------------------------------------------
     @app.post("/nodes/{node_name}/exec")
-    async def nodes_exec(node_name: str, body: _ExecRequest) -> dict[str, Any]:
+    async def nodes_exec(
+        node_name: str,
+        body: _ExecRequest,
+        _: None = Depends(_verify_internal_auth),
+    ) -> dict[str, Any]:
         conn = await registry.get(node_name)
         if conn is None:
             return {
@@ -604,7 +660,11 @@ def create_app(
 
     # -- Internal read endpoint -------------------------------------------
     @app.post("/nodes/{node_name}/read")
-    async def nodes_read(node_name: str, body: _ReadRequest) -> dict[str, Any]:
+    async def nodes_read(
+        node_name: str,
+        body: _ReadRequest,
+        _: None = Depends(_verify_internal_auth),
+    ) -> dict[str, Any]:
         conn = await registry.get(node_name)
         if conn is None:
             return {
@@ -658,7 +718,11 @@ def create_app(
 
     # -- Internal write endpoint -------------------------------------------
     @app.post("/nodes/{node_name}/write")
-    async def nodes_write(node_name: str, body: _WriteRequest) -> dict[str, Any]:
+    async def nodes_write(
+        node_name: str,
+        body: _WriteRequest,
+        _: None = Depends(_verify_internal_auth),
+    ) -> dict[str, Any]:
         conn = await registry.get(node_name)
         if conn is None:
             return {
