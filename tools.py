@@ -24,7 +24,7 @@ import logging
 import time
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +32,6 @@ logger = logging.getLogger(__name__)
 # Inline them here so environment.py can be removed outright.
 DEFAULT_EXEC_TIMEOUT_SECONDS = 60.0
 MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MiB
-
-if TYPE_CHECKING:
-    from .registry import NodeConnection, NodeRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +169,6 @@ def _node_exec_impl(
     cwd: str | None = None,
     env: dict[str, str] | None = None,
     timeout_ms: int | None = None,
-    registry: "NodeRegistry | None" = None,
 ) -> str:
     """Run ``command`` on the named node.
 
@@ -238,7 +234,6 @@ def _node_read_impl(
     path: str,
     *,
     timeout_ms: int | None = None,
-    registry: "NodeRegistry | None" = None,
 ) -> str:
     """Read a file from the named node."""
     if not target:
@@ -299,7 +294,6 @@ def _node_write_impl(
     *,
     mode: str = "overwrite",
     timeout_ms: int | None = None,
-    registry: "NodeRegistry | None" = None,
 ) -> str:
     """Write text to a file on the named node."""
     if not target:
@@ -351,10 +345,7 @@ def _node_write_impl(
         return json.dumps({"error": f"node_write failed: {e}"})
 
 
-def _node_list_impl(
-    *,
-    registry: "NodeRegistry | None" = None,
-) -> str:
+def _node_list_impl() -> str:
     """List paired nodes with their current connection state.
 
     Hits the HTTP /nodes/status endpoint.  This is always queried over
@@ -417,7 +408,6 @@ def node_exec(args: dict, **kw: Any) -> str:
         cwd=args.get("cwd"),
         env=args.get("env"),
         timeout_ms=args.get("timeout_ms"),
-        registry=args.get("registry"),
     )
 
 
@@ -427,7 +417,6 @@ def node_read(args: dict, **kw: Any) -> str:
         target=args.get("target"),
         path=args.get("path"),
         timeout_ms=args.get("timeout_ms"),
-        registry=args.get("registry"),
     )
 
 
@@ -439,47 +428,12 @@ def node_write(args: dict, **kw: Any) -> str:
         content=args.get("content"),
         mode=args.get("mode", "overwrite"),
         timeout_ms=args.get("timeout_ms"),
-        registry=args.get("registry"),
     )
 
 
 def node_list(args: dict, **kw: Any) -> str:
     """Hermes tool handler — dispatches to _node_list_impl."""
-    return _node_list_impl(registry=args.get("registry"))
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers (kept for API compatibility with existing callers)
-# ---------------------------------------------------------------------------
-
-
-def _resolve_registry(override: "NodeRegistry | None") -> "NodeRegistry":
-    """Return ``override`` if given, else a fresh registry.
-
-    Note: the tools now use httpx WebSocket to talk to the local server
-    directly, so this function is no longer used for exec/read/write.
-    It is kept for API compatibility with any external callers that
-    pass an explicit registry.
-    """
-    if override is not None:
-        return override
-    from .registry import NodeRegistry
-
-    return NodeRegistry()
-
-
-def _connection_summary(conn: "NodeConnection") -> dict[str, Any]:
-    """Render a :class:`NodeConnection` as a JSON-serialisable dict."""
-    return {
-        "name": conn.name,
-        "connected": True,
-        "connected_at": conn.connected_at.isoformat(),
-        "last_heartbeat": conn.last_heartbeat.isoformat()
-        if conn.last_heartbeat is not None
-        else None,
-        "session_id": conn.session_id,
-        "remote_addr": conn.remote_addr,
-    }
+    return _node_list_impl()
 
 
 # Public symbols.

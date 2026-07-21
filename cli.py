@@ -423,7 +423,7 @@ def _cmd_revoke(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_status(args: argparse.Namespace | None = None) -> int:
+def _cmd_status() -> int:
     """Show whether the WSS server is listening on the configured port.
 
     Probes the port from the active config via a TCP socket handshake
@@ -446,7 +446,7 @@ def _cmd_status(args: argparse.Namespace | None = None) -> int:
         return 1
 
 
-def _cmd_restart(args: argparse.Namespace | None = None) -> int:
+def _cmd_restart() -> int:
     """POST /admin/restart to drain and restart the WSS server in-place.
 
     The server re-reads the internal auth token from

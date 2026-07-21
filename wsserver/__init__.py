@@ -8,6 +8,6 @@ Splits the server into two concerns:
   result handling and the waiter/future completion logic).
 """
 
-from .server import create_app, run_server
+from .server import create_app
 
-__all__ = ["create_app", "run_server"]
+__all__ = ["create_app"]
