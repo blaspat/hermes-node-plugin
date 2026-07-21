@@ -842,49 +842,16 @@ def create_app(
     return app
 
 
-# ---------------------------------------------------------------------------
-# Convenience: run the server with uvicorn
-# ---------------------------------------------------------------------------
-
-
-def run_server(
-    config: NodeServerConfig,
-    *,
-    token_store: TokenStore | None = None,
-    registry: NodeRegistry | None = None,
-) -> None:
-    """Run the WSS server on ``config.host:config.port`` until interrupted.
-
-    Production entry point. Test code should call :func:`create_app`
-    and drive the ASGI app through ``httpx`` / ``websockets`` instead
-    of binding a real socket.
-    """
-    import uvicorn
-
-    app = create_app(
-        token_store=token_store, registry=registry, config=config
-    )
-    ssl_kwargs: dict[str, Any] = {}
-    if config.uses_tls():
-        ssl_kwargs = {
-            "ssl_certfile": config.tls_cert_path,
-            "ssl_keyfile": config.tls_key_path,
-        }
-    uvicorn.run(
-        app,
-        host=config.host,
-        port=config.port,
-        log_level="info",
-        **ssl_kwargs,
-    )
-
-
 __all__ = [
     "create_app",
-    "run_server",
     "CLOSE_AUTH_FAILED",
     "CLOSE_PROTOCOL_VERSION",
     "CLOSE_MESSAGE_OUT_OF_ORDER",
     "CLOSE_RATE_LIMIT_EXCEEDED",
+    "CLOSE_HANDSHAKE_TIMEOUT",
     "PROTOCOL_MAJOR",
+    "_ensure_internal_token",
+    "_internal_token_path",
+    "_safe_close",
+    "_read_token_from_disk",
 ]

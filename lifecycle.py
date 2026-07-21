@@ -12,9 +12,7 @@ What lives here:
 
   * :class:`ServerRunner` — owns the uvicorn.Server instance, the
     background asyncio task, and the FastAPI app.
-  * :func:`get_default_runner` / :func:`reset_default_runner` — module
-    singletons used by :func:`hermes_nodes_plugin.register` to attach
-    a single runner to the gateway's session lifecycle.
+  * :func:`get_default_runner` — module singleton set by
   * The two thin hook callbacks the plugin's ``register(ctx)`` binds:
     they translate Hermes session events into ``runner.start`` /
     ``runner.drain`` calls.
@@ -490,8 +488,7 @@ class ServerRunner:
 
 
 # The plugin's ``register(ctx)`` binds a *singleton* runner: there's
-# one per Hermes process. Tests call :func:`reset_default_runner` to
-# start each test from a clean slate. The runner is constructed
+# one per Hermes process. The runner is constructed
 # lazily on the first ``start()`` so the "Fernet key missing" error
 # is deferred to startup, not to plugin load.
 _default_runner: ServerRunner | None = None

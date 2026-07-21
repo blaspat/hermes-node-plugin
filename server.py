@@ -22,14 +22,13 @@ from .wsserver.server import (
     PROTOCOL_MAJOR,
     _ensure_internal_token,
     _internal_token_path,
+    _read_token_from_disk,
     create_app,
-    run_server,
 )
 from .wsserver.server import _safe_close
 
 __all__ = [
     "create_app",
-    "run_server",
     "CLOSE_AUTH_FAILED",
     "CLOSE_PROTOCOL_VERSION",
     "CLOSE_MESSAGE_OUT_OF_ORDER",
@@ -37,5 +36,6 @@ __all__ = [
     "PROTOCOL_MAJOR",
     "_ensure_internal_token",
     "_internal_token_path",
+    "_read_token_from_disk",
     "_safe_close",
 ]
