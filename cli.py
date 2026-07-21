@@ -63,6 +63,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.error
 from typing import Any
 
 from .config import load_config
@@ -81,6 +82,7 @@ STATE_CONNECTED = "connected"
 STATE_DISCONNECTED = "disconnected"
 STATE_NEVER_SEEN = "never_seen"
 STATE_REVOKED = "revoked"
+STATE_UNKNOWN = "unknown"
 
 # ---------------------------------------------------------------------------
 # Argparse setup — bound to ``hermes node <subcommand>``
@@ -357,7 +359,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
     connected_names = _connected_names()
 
     rows = [
-        _format_row(rec, rec.name in connected_names)
+        _format_row(rec, connected_names is not None and rec.name in connected_names)
         for rec in records
     ]
 
@@ -365,6 +367,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
         for row in rows:
             print(json.dumps(row, sort_keys=True))
         return 0
+
+    if connected_names is None:
+        print(
+            "warning: cannot query server — connection state shown as 'unknown'.  "
+            "Run `hermes node restart` or restart the gateway if this persists.",
+            file=sys.stderr,
+        )
+        print()
 
     if not rows:
         print("no paired nodes. run `hermes node pair --name <name>` to add one.")
@@ -485,14 +495,19 @@ def _cmd_restart(args: argparse.Namespace | None = None) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _format_row(record: TokenRecord, is_connected: bool) -> dict[str, Any]:
+def _format_row(record: TokenRecord, is_connected: bool | None) -> dict[str, Any]:
     """Map a :class:`TokenRecord` + liveness bool to a list row.
 
     Pulled out as a free function so the state-derivation logic is
     testable without spinning up a config / store / registry.
+
+    ``is_connected`` may be ``None`` when the server could not be
+    queried — the state collapses to ``unknown`` in that case.
     """
     if record.revoked:
         state = STATE_REVOKED
+    elif is_connected is None:
+        state = STATE_UNKNOWN
     elif is_connected:
         state = STATE_CONNECTED
     elif record.last_used_at is None:
@@ -508,20 +523,14 @@ def _format_row(record: TokenRecord, is_connected: bool) -> dict[str, Any]:
     }
 
 
-def _connected_names() -> set[str]:
+def _connected_names() -> set[str] | None:
     """Return the set of node names with a live connection.
 
     The registry is owned by the long-running server; the CLI
-    command is a short-lived process. We query the server's HTTP
-    status endpoint at ``/nodes`` rather than maintaining
-    our own in-process registry — the CLI's registry would be
-    a fresh empty one that never saw any connections.
-
-    If the server isn't running, the port isn't listening, or
-    the endpoint fails, we fall back to an empty set. The list
-    command should still succeed in that case — connection state
-    just collapses to ``disconnected`` / ``never_seen`` for
-    every row.
+    command is a short-lived process.  Returns ``None`` when the
+    server could not be queried (internal auth mismatch, server
+    not running, timeout) so the caller can distinguish \"no nodes
+    connected\" from \"don't know\".
     """
     config = load_config()
     base_url = f"http://{config.connect_host}:{config.port}"
@@ -540,8 +549,21 @@ def _connected_names() -> set[str]:
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = __import__("json").loads(resp.read())
             return {n["name"] for n in data.get("nodes", [])}
+    except urllib.error.HTTPError as exc:
+        # 401 / 403 — internal auth mismatch.  Surface clearly so
+        # the operator knows `hermes node list` can't see the live
+        # registry, instead of silently showing everything disconnected.
+        if exc.code in (401, 403):
+            print(
+                f"warning: server returned {exc.code} — "
+                f"internal auth token mismatch; connection state is unknown.  "
+                f"Restart the gateway to sync tokens.",
+                file=sys.stderr,
+            )
+        return None
     except Exception:
-        return set()
+        # Server not running, timeout, etc.
+        return None
 
 
 def main() -> None:
