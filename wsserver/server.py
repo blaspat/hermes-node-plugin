@@ -32,6 +32,7 @@ WebSocket close codes are taken from PROTOCOL §4 verbatim.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import secrets
@@ -107,19 +108,37 @@ def _ensure_internal_token() -> str:
     return token
 
 
+def _read_token_from_disk() -> str | None:
+    """Read the internal auth token from the shared token file.
+
+    Reads on every call so manual edits and auto-start regenerations
+    take effect without a gateway restart.  Returns ``None`` when the
+    file is missing or empty (server not yet initialised).
+    """
+    try:
+        raw = _internal_token_path().read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return None
+    if not raw:
+        return None
+    return raw.partition("\n")[0]
+
+
 async def _verify_internal_auth(request: Request) -> None:
     """FastAPI dependency that guards internal HTTP endpoints.
 
-    Checks ``Authorization: Bearer <token>`` against the token the
-    server generated at startup. Returns 401/503 if missing or wrong.
+    Reads the token from disk on every request so manual edits and
+    auto-start regenerations take effect without a full gateway restart.
+    Returns 401/503 if missing or wrong.  Uses ``hmac.compare_digest``
+    for constant-time comparison.
     """
-    expected: str | None = getattr(request.app.state, "internal_token", None)
+    expected: str | None = _read_token_from_disk()
     if expected is None:
         raise HTTPException(status_code=503, detail="Server not ready")
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
-    if auth_header.removeprefix("Bearer ") != expected:
+    if not hmac.compare_digest(auth_header.removeprefix("Bearer "), expected):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
