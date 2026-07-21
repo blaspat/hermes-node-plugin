@@ -382,6 +382,16 @@ def _node_list_impl(
         cfg = load_config()
         status_url = f"http://{cfg.connect_host}:{cfg.port}/nodes"
         data = _request_with_retry("GET", status_url, timeout=2.0)
+        # If the server returned an auth error (internal token mismatch),
+        # surface it clearly instead of silently returning an empty list.
+        if isinstance(data, dict) and "detail" in data and "nodes" not in data:
+            detail = data["detail"]
+            return json.dumps({
+                "error": f"cannot query server: {detail}.  "
+                         f"Restart the gateway to sync the internal auth token.",
+                "nodes": [],
+                "count": 0,
+            })
         connected: list[dict[str, Any]] = data.get("nodes", [])
         return json.dumps({
             "nodes": connected,
