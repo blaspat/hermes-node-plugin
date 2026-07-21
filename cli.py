@@ -63,7 +63,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.error
 from typing import Any
 
 from .config import load_config
