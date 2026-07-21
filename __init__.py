@@ -153,22 +153,37 @@ def register(ctx) -> None:
     #
     # Disabled in test/CI environments by setting the env var to ``0``.
 
+    import logging
     import os
-    import datetime as _datetime
+    from logging.handlers import RotatingFileHandler
 
     _LOG_DIR = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
     _LOG_FILE = os.path.join(_LOG_DIR, "hermes-node-plugin.log")
 
-    def _log(msg: str) -> None:
-        ts = _datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"[{ts}] {msg}"
-        print(line, flush=True)
-        try:
-            with open(_LOG_FILE, "a") as _f:
-                _f.write(line + "\n")
-                _f.flush()
-        except Exception:
-            pass
+    _auto_logger = logging.getLogger("hermes_nodes_plugin.auto_start")
+    _auto_logger.setLevel(logging.DEBUG)
+    _auto_logger.propagate = False
+    _fh = RotatingFileHandler(
+        _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=1
+    )
+    _fh.setLevel(logging.DEBUG)
+    _fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    _auto_logger.addHandler(_fh)
+
+    import datetime as _datetime
+
+    def _log(msg: str, *, to_stdout: bool = False) -> None:
+        """Log to rotating file (5 MB cap, 1 backup).  Prints to stdout
+        only when *to_stdout* is True — use for errors and key lifecycle
+        events, not routine diagnostics."""
+        _auto_logger.info(msg)
+        if to_stdout:
+            print(
+                f"[{_datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}",
+                flush=True,
+            )
 
     global _auto_start_done
     if _auto_start_done:
@@ -216,14 +231,20 @@ def register(ctx) -> None:
                     from .lifecycle import _on_session_start
 
                     loop.run_until_complete(_on_session_start())
-                    _log(f"WSS server started on port {_check_port}")
+                    _log(
+                        f"WSS server started on port {_check_port}",
+                        to_stdout=True,
+                    )
                     # Keep the loop alive so uvicorn tasks continue running.
                     loop.run_forever()
                 except Exception as exc:
-                    _log(f"server background thread failed: {exc}")
+                    _log(
+                        f"server background thread failed: {exc}",
+                        to_stdout=True,
+                    )
                     import traceback
 
-                    _log(traceback.format_exc())
+                    _log(traceback.format_exc(), to_stdout=True)
                 finally:
                     _log("event loop closed")
                     loop.close()
@@ -237,7 +258,10 @@ def register(ctx) -> None:
                 t.start()
                 _log("daemon thread started")
             except Exception as exc:
-                _log(f"could not start server thread: {exc}")
+                _log(
+                    f"could not start server thread: {exc}",
+                    to_stdout=True,
+                )
         else:
             _log(f"port {_check_port} already bound — skipping")
     else:
