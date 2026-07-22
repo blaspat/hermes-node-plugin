@@ -57,6 +57,10 @@ The WSS server starts automatically when Hermes starts a session, via the
 plugin's `on_session_start` hook. No manual steps required — Hermes wires it
 up when the plugin is loaded.
 
+Auto-start diagnostics are written to a rotating log at
+`~/.hermes/logs/hermes-node-plugin.log`. The plugin also prevents duplicate
+WSS servers when installed in multiple profiles.
+
 For manual / dev mode (server only, no LLM):
 
 ```bash
@@ -113,6 +117,30 @@ Returns a JSON object with `nodes` (array of name, connected_at, last_heartbeat,
 
 ```bash
 hermes node revoke --name my-devbox
+```
+
+### 8. CLI: list nodes
+
+Show every paired node and its connection state from the terminal (no LLM needed):
+
+```bash
+hermes node list
+```
+
+### 9. CLI: status
+
+Check server health and uptime:
+
+```bash
+hermes node status
+```
+
+### 10. CLI: restart
+
+Restart the WSS server and reload the internal auth token:
+
+```bash
+hermes node restart
 ```
 
 ## Contributing
