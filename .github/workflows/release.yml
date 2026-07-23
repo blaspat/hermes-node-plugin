@@ -34,6 +34,8 @@ jobs:
         run: |
           python -m py_compile $(git ls-files '*.py')
       - name: Test
+        env:
+          HERMES_NODES_TOKEN_KEY: "a_A7TeyEDUtaLh1WCNpf2frKKIYe4V-ndY-p6cb8v3o="
         run: python -m pytest tests/ -q --tb=short
 
   # ---------------------------------------------------------------------------
