@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -166,6 +167,8 @@ class _HelloMessage(BaseModel):
     platform: str | None = Field(default=None, max_length=MAX_PLATFORM_LEN)
     arch: str | None = Field(default=None, max_length=MAX_ARCH_LEN)
     capabilities: list[str] | None = None
+    e2e: bool | None = Field(default=None)
+    ecdh_pub: str | None = Field(default=None, max_length=MAX_TOKEN_LEN)
 
     @field_validator("node_name", mode="before")
     @classmethod
@@ -209,7 +212,8 @@ class _AuthMessage(BaseModel):
 
     type: str = Field(pattern=r"^auth$")
     node_name: str = Field(max_length=MAX_NODE_NAME_LEN)
-    token: str = Field(max_length=MAX_TOKEN_LEN)
+    token: str | None = Field(default=None, max_length=MAX_TOKEN_LEN)
+    proof: str | None = Field(default=None, max_length=MAX_TOKEN_LEN)
     ts: str | None = Field(default=None, max_length=MAX_TS_LEN)
 
 
@@ -219,14 +223,23 @@ class _AuthMessage(BaseModel):
 
 
 def _build_hello_ack(
-    protocol_version: str, session_id: str
+    protocol_version: str,
+    session_id: str,
+    *,
+    ecdh_pub: str | None = None,
+    salt: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    msg: dict[str, Any] = {
         "type": "hello_ack",
         "protocol_version": protocol_version,
         "session_id": session_id,
         "server_time": _now_rfc3339_ms(),
     }
+    if ecdh_pub is not None:
+        msg["ecdh_pub"] = ecdh_pub
+    if salt is not None:
+        msg["salt"] = salt
+    return msg
 
 
 def _build_hello_err(
@@ -240,12 +253,41 @@ def _build_hello_err(
     }
 
 
-def _build_auth_ok(session_id: str) -> dict[str, Any]:
-    return {"type": "auth_ok", "session_id": session_id}
+def _build_auth_ok(
+    session_id: str,
+    *,
+    proof: str | None = None,
+) -> dict[str, Any]:
+    msg: dict[str, Any] = {
+        "type": "auth_ok",
+        "session_id": session_id,
+    }
+    if proof is not None:
+        msg["proof"] = proof
+    return msg
 
 
 def _build_auth_err(reason: str, code: int) -> dict[str, Any]:
     return {"type": "auth_err", "reason": reason, "code": code}
+
+
+def _send_e2e_safe(
+    websocket: WebSocket,
+    msg: dict[str, Any],
+    *,
+    e2e_key: bytes | None = None,
+) -> None:
+    """Send a JSON message. If *e2e_key* is set, encrypt into an ``enc`` frame."""
+    if e2e_key is not None:
+        from .e2e import encrypt_e2e, encode_b64
+
+        plain = json.dumps(msg).encode()
+        ct = encrypt_e2e(e2e_key, plain)
+        msg = {"type": "enc", "data": encode_b64(ct)}
+    try:
+        asyncio.create_task(websocket.send_json(msg))
+    except Exception:
+        pass
 
 
 def _build_rate_limit_err(
@@ -394,7 +436,7 @@ def create_app(
         client = websocket.scope.get("client")
         remote_addr = client[0] if client else ""
 
-        # -- 1. hello --------------------------------------------------------
+        # ── 1. hello --------------------------------------------------------
         try:
             raw = await asyncio.wait_for(
                 websocket.receive_json(),
@@ -448,10 +490,48 @@ def create_app(
             await _safe_close(websocket, CLOSE_PROTOCOL_VERSION)
             return
 
-        await _send_json_safe(
-            websocket,
-            _build_hello_ack(hello.protocol_version, session_id),
-        )
+        # ── E2E: if client sent ecdh_pub, do key exchange ──
+        e2e_handshake_key: bytes | None = None
+        if hello.e2e and hello.ecdh_pub:
+            from . import e2e as _e2e
+
+            try:
+                server_kp = _e2e.generate_e2e_keypair()
+                client_pub = _e2e.decode_public_key(hello.ecdh_pub)
+                shared = _e2e.ecdh(server_kp.private, client_pub)
+                salt_bytes = _e2e.generate_salt()
+                token = app.state.token_store.resolve_token(hello.node_name)
+                e2e_handshake_key = _e2e.derive_handshake_key(
+                    shared, salt_bytes, token
+                )
+            except (ValueError, Exception) as exc:
+                logger.warning("E2E key exchange failed for %r: %s", hello.node_name, exc)
+                await _send_json_safe(
+                    websocket,
+                    _build_hello_err(
+                        reason=f"e2e_keypair_failed: {exc}",
+                        code=CLOSE_PROTOCOL_VERSION,
+                        server_max_version=_server_max_version(),
+                    ),
+                )
+                await _safe_close(websocket, CLOSE_PROTOCOL_VERSION)
+                return
+
+            await _send_json_safe(
+                websocket,
+                _build_hello_ack(
+                    hello.protocol_version,
+                    session_id,
+                    ecdh_pub=_e2e.encode_public_key(server_kp.public),
+                    salt=_e2e.encode_b64(salt_bytes),
+                ),
+            )
+        else:
+            e2e_handshake_key = None
+            await _send_json_safe(
+                websocket,
+                _build_hello_ack(hello.protocol_version, session_id),
+            )
 
         # -- 2. auth ---------------------------------------------------------
         try:
@@ -499,7 +579,42 @@ def create_app(
             await _safe_close(websocket, CLOSE_AUTH_FAILED)
             return
 
-        is_valid = False
+        # ── E2E auth: verify proof ──
+        e2e_session_key: bytes | None = None
+        if e2e_handshake_key is not None:
+            from . import e2e as _e2e  # already imported above, re-assert for type checker
+
+            if not auth.proof:
+                logger.warning("E2E auth missing proof from %r", hello.node_name)
+                await _send_json_safe(
+                    websocket,
+                    _build_auth_err(reason="e2e_proof_missing", code=CLOSE_AUTH_FAILED),
+                )
+                await _safe_close(websocket, CLOSE_AUTH_FAILED)
+                return
+
+            try:
+                client_pf = _e2e.decode_b64(auth.proof)
+                expected = _e2e.compute_client_proof(e2e_handshake_key)
+                _e2e.verify_proof(expected, client_pf, "client proof")
+            except ValueError as exc:
+                logger.warning(
+                    "E2E proof mismatch for %r: %s", hello.node_name, exc
+                )
+                await _send_json_safe(
+                    websocket,
+                    _build_auth_err(reason="e2e_proof_mismatch", code=CLOSE_AUTH_FAILED),
+                )
+                await _safe_close(websocket, CLOSE_AUTH_FAILED)
+                return
+
+            # Derive session key
+            e2e_session_key = _e2e.derive_session_key(e2e_handshake_key, session_id)
+            server_proof = _e2e.compute_server_proof(e2e_handshake_key)
+            is_valid = True  # proof verified — skip token store check
+        else:
+            # Legacy auth — validate token
+            is_valid = False
         try:
             # tokens.validate() does a full read-decrypt-write cycle with
             # os.fsync on the token store. That blocks the event loop if
@@ -537,18 +652,46 @@ def create_app(
         if previous is not None and previous.websocket is not websocket:
             await _safe_close(previous.websocket, 1000)  # WS_1000_NORMAL_CLOSURE
 
-        await _send_json_safe(websocket, _build_auth_ok(session_id))
+        if e2e_session_key is not None:
+            conn.e2e_session_key = e2e_session_key  # type: ignore[attr-defined]
+            await _send_json_safe(
+                websocket,
+                _build_auth_ok(
+                    session_id,
+                    proof=_e2e.encode_b64(server_proof),
+                ),
+            )
+        else:
+            await _send_json_safe(websocket, _build_auth_ok(session_id))
 
         # -- 4. hold open; route inbound messages -------------------------
+        e2e_key: bytes | None = (
+            conn.e2e_session_key if hasattr(conn, "e2e_session_key") else None  # type: ignore[attr-defined]
+        )
+
+        def _send(msg: dict[str, Any]) -> None:
+            _send_e2e_safe(websocket, msg, e2e_key=e2e_key)
+
         try:
             while True:
                 raw = await websocket.receive_json()
+                # ── E2E: decrypt enc frames ──
+                if raw.get("type") == "enc" and e2e_key is not None:
+                    try:
+                        from .e2e import decode_b64, decrypt_e2e
+
+                        ct = decode_b64(raw["data"])
+                        plain = decrypt_e2e(e2e_key, ct)
+                        raw = json.loads(plain)
+                    except (ValueError, KeyError, Exception):
+                        logger.warning("E2E decrypt failed for %r", auth.node_name)
+                        await _safe_close(websocket, 4000)
+                        break
                 # Heartbeat: any inbound message counts.
                 await registry.touch_heartbeat(auth.node_name)
                 # Respond to ping.
                 if raw.get("type") == "ping":
-                    await _send_json_safe(
-                        websocket,
+                    _send(
                         {
                             "type": "pong",
                             "ts": _now_rfc3339_ms(),
