@@ -511,6 +511,12 @@ def create_app(
                 e2e_handshake_key = _e2e.derive_handshake_key(
                     shared, salt_bytes, token
                 )
+            except TokenStoreError as exc:
+                logger.warning(
+                    "E2E token resolution failed for %r: %s — falling back to legacy auth",
+                    hello.node_name, exc,
+                )
+                e2e_handshake_key = None
             except (ValueError, Exception) as exc:
                 logger.warning("E2E key exchange failed for %r: %s", hello.node_name, exc)
                 await _send_json_safe(
@@ -524,15 +530,21 @@ def create_app(
                 await _safe_close(websocket, CLOSE_PROTOCOL_VERSION)
                 return
 
-            await _send_json_safe(
-                websocket,
-                _build_hello_ack(
-                    hello.protocol_version,
-                    session_id,
-                    ecdh_pub=_e2e.encode_public_key(server_kp.public),
-                    salt=_e2e.encode_b64(salt_bytes),
-                ),
-            )
+            if e2e_handshake_key is not None:
+                await _send_json_safe(
+                    websocket,
+                    _build_hello_ack(
+                        hello.protocol_version,
+                        session_id,
+                        ecdh_pub=_e2e.encode_public_key(server_kp.public),
+                        salt=_e2e.encode_b64(salt_bytes),
+                    ),
+                )
+            else:
+                await _send_json_safe(
+                    websocket,
+                    _build_hello_ack(hello.protocol_version, session_id),
+                )
         else:
             e2e_handshake_key = None
             await _send_json_safe(
@@ -624,23 +636,20 @@ def create_app(
         else:
             # Legacy auth — validate token
             is_valid = False
-        try:
-            # tokens.validate() does a full read-decrypt-write cycle with
-            # os.fsync on the token store. That blocks the event loop if
-            # called directly from async code. Push it to a thread.
-            is_valid = await asyncio.to_thread(
-                token_store.validate, auth.node_name, auth.token
-            )
-        except TokenStoreError as exc:
-            logging.getLogger(__name__).error(
-                "token store error during auth: %s", exc
-            )
-            await _send_json_safe(
-                websocket,
-                _build_auth_err(reason="invalid_token", code=CLOSE_AUTH_FAILED),
-            )
-            await _safe_close(websocket, CLOSE_AUTH_FAILED)
-            return
+            try:
+                is_valid = await asyncio.to_thread(
+                    token_store.validate, auth.node_name, auth.token
+                )
+            except TokenStoreError as exc:
+                logging.getLogger(__name__).error(
+                    "token store error during auth: %s", exc
+                )
+                await _send_json_safe(
+                    websocket,
+                    _build_auth_err(reason="invalid_token", code=CLOSE_AUTH_FAILED),
+                )
+                await _safe_close(websocket, CLOSE_AUTH_FAILED)
+                return
 
         if not is_valid:
             await _send_json_safe(
