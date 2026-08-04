@@ -39,13 +39,20 @@ import os
 import secrets
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ..config import NodeServerConfig
@@ -101,7 +108,7 @@ def _ensure_internal_token() -> str:
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode=0o600)
     try:
         os.write(fd, token.encode("utf-8"))
-        with open(fd, "wb", closefd=False) as f:  # noqa: SIM115
+        with open(fd, "wb", closefd=False) as f:
             f.write(b"\n")
         os.fsync(fd)
     finally:
@@ -279,7 +286,7 @@ def _send_e2e_safe(
 ) -> None:
     """Send a JSON message. If *e2e_key* is set, encrypt into an ``enc`` frame."""
     if e2e_key is not None:
-        from .e2e import encrypt_e2e, encode_b64
+        from .e2e import encode_b64, encrypt_e2e
 
         plain = json.dumps(msg).encode()
         ct = encrypt_e2e(e2e_key, plain)
@@ -305,7 +312,7 @@ def _build_rate_limit_err(
 
 def _now_rfc3339_ms() -> str:
     """UTC RFC 3339 timestamp with millisecond precision."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
 
@@ -442,7 +449,7 @@ def create_app(
                 websocket.receive_json(),
                 timeout=config.handshake_timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "WSS hello timeout (%.1fs) from %r; closing 4004",
                 config.handshake_timeout_seconds,
@@ -539,7 +546,7 @@ def create_app(
                 websocket.receive_json(),
                 timeout=config.handshake_timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "WSS auth timeout (%.1fs) from %r (node_name=%r); closing 4004",
                 config.handshake_timeout_seconds,
@@ -582,7 +589,9 @@ def create_app(
         # ── E2E auth: verify proof ──
         e2e_session_key: bytes | None = None
         if e2e_handshake_key is not None:
-            from . import e2e as _e2e  # already imported above, re-assert for type checker
+            from . import (
+                e2e as _e2e,  # already imported above, re-assert for type checker
+            )
 
             if not auth.proof:
                 logger.warning("E2E auth missing proof from %r", hello.node_name)
@@ -816,7 +825,7 @@ def create_app(
                 "code": 503,
                 "reason": f"node disconnected mid-call: {wc}",
             }
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await registry.unregister_waiter(node_name, request_id)
             return {
                 "status": "error",
@@ -874,7 +883,7 @@ def create_app(
                 "code": 503,
                 "reason": f"node disconnected mid-call: {wc}",
             }
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await registry.unregister_waiter(node_name, request_id)
             return {
                 "status": "error",
@@ -941,7 +950,7 @@ def create_app(
                 "code": 503,
                 "reason": f"node disconnected mid-call: {wc}",
             }
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await registry.unregister_waiter(node_name, request_id)
             return {
                 "status": "error",
@@ -986,15 +995,15 @@ def create_app(
 
 
 __all__ = [
-    "create_app",
     "CLOSE_AUTH_FAILED",
-    "CLOSE_PROTOCOL_VERSION",
-    "CLOSE_MESSAGE_OUT_OF_ORDER",
-    "CLOSE_RATE_LIMIT_EXCEEDED",
     "CLOSE_HANDSHAKE_TIMEOUT",
+    "CLOSE_MESSAGE_OUT_OF_ORDER",
+    "CLOSE_PROTOCOL_VERSION",
+    "CLOSE_RATE_LIMIT_EXCEEDED",
     "PROTOCOL_MAJOR",
     "_ensure_internal_token",
     "_internal_token_path",
-    "_safe_close",
     "_read_token_from_disk",
+    "_safe_close",
+    "create_app",
 ]

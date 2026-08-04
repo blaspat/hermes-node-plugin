@@ -25,7 +25,7 @@ class TokenStoreError(PluginError):
 
 
 __all__ = [
-    "PluginError",
     "ConfigError",
+    "PluginError",
     "TokenStoreError",
 ]

@@ -10,7 +10,6 @@ handlers can close the WebSocket on rate-limit violations.
 
 from __future__ import annotations
 
-
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -30,7 +29,7 @@ _ROUTABLE_RESULT_TYPES = frozenset(
 
 
 async def route_inbound(
-    registry: "NodeRegistry",
+    registry: NodeRegistry,
     node_name: str,
     raw: Any,
 ) -> None:
@@ -100,6 +99,6 @@ async def route_inbound(
 
 
 __all__ = [
-    "route_inbound",
     "CLOSE_RATE_LIMIT_EXCEEDED",
+    "route_inbound",
 ]

@@ -73,7 +73,6 @@ from .tokens import (
     token_store_from_config,
 )
 
-
 # Status strings used by ``hermes node list``. Kept module-level so
 # tests and downstream tools can import them without re-deriving the
 # vocabulary.
@@ -328,7 +327,7 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     # line and discard the rest on stderr (or `2>/dev/null` it).
     print(f"token: {token}")
     print(f"name:  {name}", file=sys.stderr)
-    print("", file=sys.stderr)
+    print(file=sys.stderr)
     print("Run this on the laptop:", file=sys.stderr)
     print(
         f"  hermes-node pair --server <host:port> --token {token} --name {name}",
@@ -441,7 +440,7 @@ def _cmd_status() -> int:
         s.close()
         print(f"hermes-node server: listening on {config.connect_host}:{config.port}")
         return 0
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         print("hermes-node server: not running")
         return 1
 
