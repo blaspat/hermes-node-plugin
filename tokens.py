@@ -513,7 +513,7 @@ class TokenStore:
         match.last_used_at = now
         try:
             self._write_all(records)
-        except Exception:
+        except Exception:  # noqa: S110
             # Intentionally broad: a transient disk/permission failure
             # must not convert a successful auth into a server crash.
             # The auth result is the source of truth; the audit update

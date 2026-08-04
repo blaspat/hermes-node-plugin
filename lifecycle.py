@@ -311,7 +311,7 @@ class ServerRunner:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110
                 pass
             self._task = None
             self._server = None
@@ -357,7 +357,7 @@ class ServerRunner:
                 sweep_task.cancel()
                 try:
                     await sweep_task
-                except (asyncio.CancelledError, Exception):
+                except (asyncio.CancelledError, Exception):  # noqa: S110
                     pass
             except Exception as exc:  # pragma: no cover — defensive
                 logger.warning("hermes-node stale sweep raised on drain: %s", exc)
@@ -383,7 +383,7 @@ class ServerRunner:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110
                 pass
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("hermes-node server drain raised: %s", exc)

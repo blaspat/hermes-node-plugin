@@ -198,7 +198,7 @@ class _HelloMessage(BaseModel):
             )
         for i, item in enumerate(value):
             if not isinstance(item, str):
-                raise ValueError(
+                raise TypeError(
                     f"capabilities[{i}] must be a string, got {type(item).__name__}"
                 )
             if len(item) > MAX_CAPABILITY_LEN:
@@ -293,7 +293,7 @@ def _send_e2e_safe(
         msg = {"type": "enc", "data": encode_b64(ct)}
     try:
         asyncio.create_task(websocket.send_json(msg))
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
 

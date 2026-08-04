@@ -94,8 +94,8 @@ def _run_server() -> None:
         # Block the thread — loop.run_forever() keeps the server alive
         loop.run_forever()
 
-    except Exception as exc:
-        logger.exception("hermes-node server failed to start: %s", exc)
+    except Exception:
+        logger.exception("hermes-node server failed to start")
 
     finally:
         # Give loop a chance to finish pending tasks, then close

@@ -54,9 +54,7 @@ def _should_retry(status_code: int, reason: str = "") -> bool:
     """
     if status_code >= 500:
         return True
-    if "not connected" in reason.lower():
-        return True
-    return False
+    return "not connected" in reason.lower()
 
 
 def _read_internal_token() -> str | None:

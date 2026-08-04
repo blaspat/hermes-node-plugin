@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -469,7 +469,7 @@ class NodeRegistry:
         # See __len__ note: best-effort snapshot, not lock-safe.
         return name in self._connections
 
-    def __iter__(self) -> Iterable[str]:
+    def __iter__(self) -> Iterator[str]:
         # See __len__ note: best-effort snapshot, not lock-safe.
         # The dict may be mutated between tuple() construction and the
         # caller's first next(); iterate promptly and do not rely on the

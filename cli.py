@@ -580,13 +580,12 @@ def main() -> None:
     sys.exit(node_command(args) or 0)
 
 __all__ = [
-    "setup_node_cli",
-    "node_command",
     "STATE_CONNECTED",
     "STATE_DISCONNECTED",
     "STATE_NEVER_SEEN",
     "STATE_REVOKED",
-    # Internal helpers exported for unit tests:
-    "_format_row",
     "_connected_names",
+    "_format_row",
+    "node_command",
+    "setup_node_cli",
 ]
