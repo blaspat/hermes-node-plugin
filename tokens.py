@@ -238,15 +238,19 @@ class _StoredRecord:
     created_at: str
     revoked: bool
     last_used_at: str | None = None
+    token: str | None = None  # raw token (encrypted at rest via Fernet file-level)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "name": self.name,
             "token_hash": self.token_hash,
             "created_at": self.created_at,
             "revoked": self.revoked,
             "last_used_at": self.last_used_at,
         }
+        if self.token is not None:
+            d["token"] = self.token
+        return d
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> _StoredRecord:
@@ -259,6 +263,7 @@ class _StoredRecord:
             created_at=data["created_at"],
             revoked=bool(data.get("revoked", False)),
             last_used_at=data.get("last_used_at"),
+            token=data.get("token"),
         )
 
     def to_public(self) -> TokenRecord:
@@ -377,6 +382,7 @@ class TokenStore:
                     name=name,
                     token_hash=token_hash,
                     created_at=now,
+                    token=token,
                     revoked=False,
                 )
             )
@@ -521,6 +527,24 @@ class TokenStore:
             # successful validate.
             pass
         return True
+
+    def resolve_token(self, name: str) -> str:
+        """Return the raw pairing token for ``name``, or raise TokenStoreError.
+
+        Only needed for E2E key derivation — the raw token is mixed into
+        the HKDF to produce the handshake key. The token is stored encrypted
+        at rest (Fernet file-level).
+        """
+        records = self._read()
+        for rec in records:
+            if rec.name == name and not rec.revoked:
+                if rec.token is None:
+                    raise TokenStoreError(
+                        f"node {name!r} has no stored token "
+                        f"(paired before v0.1.2 — re-pair to enable E2E)"
+                    )
+                return rec.token
+        raise TokenStoreError(f"node {name!r} not found or revoked")
 
     # -- internals ---------------------------------------------------------
 
