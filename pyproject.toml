@@ -26,3 +26,12 @@ packages = ["hermes_node_plugin", "hermes_node_plugin.wsserver"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+ignore = [
+    "BLE001",    # blind except: codebase-wide defensive pattern
+    "N999",      # module name with hyphens
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/run_server.py" = ["EXE001"]

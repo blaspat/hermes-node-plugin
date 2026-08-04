@@ -49,10 +49,11 @@ import os
 import secrets
 import tempfile
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -512,7 +513,7 @@ class TokenStore:
         match.last_used_at = now
         try:
             self._write_all(records)
-        except Exception:
+        except Exception:  # noqa: S110
             # Intentionally broad: a transient disk/permission failure
             # must not convert a successful auth into a server crash.
             # The auth result is the source of truth; the audit update
@@ -643,11 +644,10 @@ class TokenStore:
         can't happen in normal usage but is easy to accidentally do in
         tests.
         """
-        with self._lock:
-            with _file_lock(self.path):
-                records = self._read()
-                new_records = fn(records)
-                self._write_all(new_records)
+        with self._lock, _file_lock(self.path):
+            records = self._read()
+            new_records = fn(records)
+            self._write_all(new_records)
 
 
 # ---------------------------------------------------------------------------
@@ -685,7 +685,7 @@ def _now_iso() -> str:
     are RFC 3339 and most parsers (including stdlib
     :func:`datetime.fromisoformat` since 3.11) accept both.
     """
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @contextlib.contextmanager

@@ -76,7 +76,8 @@ if TYPE_CHECKING:
     # native extension sometimes fails to load inside the hermes
     # runtime's plugin loader. The runtime imports live next to
     # the functions that need them.
-    import uvicorn  # noqa: F401
+    import uvicorn
+
     from .config import NodeServerConfig
     from .registry import NodeRegistry
     from .tokens import TokenStore
@@ -85,7 +86,6 @@ from .audit import default_audit_writer
 from .config import load_config
 from .errors import ConfigError, TokenStoreError
 from .tokens import token_store_from_config
-
 
 logger = logging.getLogger(__name__)
 
@@ -311,7 +311,7 @@ class ServerRunner:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110
                 pass
             self._task = None
             self._server = None
@@ -349,7 +349,7 @@ class ServerRunner:
         if sweep_task is not None and not sweep_task.done():
             try:
                 await asyncio.wait_for(asyncio.shield(sweep_task), timeout=timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "hermes-node stale sweep did not exit within %.1fs; cancelling",
                     timeout,
@@ -357,7 +357,7 @@ class ServerRunner:
                 sweep_task.cancel()
                 try:
                     await sweep_task
-                except (asyncio.CancelledError, Exception):
+                except (asyncio.CancelledError, Exception):  # noqa: S110
                     pass
             except Exception as exc:  # pragma: no cover — defensive
                 logger.warning("hermes-node stale sweep raised on drain: %s", exc)
@@ -375,7 +375,7 @@ class ServerRunner:
         server.should_exit = True
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "hermes-node server did not drain within %.1fs; cancelling",
                 timeout,
@@ -383,7 +383,7 @@ class ServerRunner:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110
                 pass
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("hermes-node server drain raised: %s", exc)
@@ -471,7 +471,7 @@ class ServerRunner:
                     await asyncio.wait_for(
                         self._stop_sweep.wait(), timeout=interval
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Expected: interval elapsed, run another sweep.
                     pass
         except asyncio.CancelledError:
@@ -620,7 +620,7 @@ async def _on_session_end() -> None:
 
 __all__ = [
     "ServerRunner",
-    "get_default_runner",
-    "_on_session_start",
     "_on_session_end",
+    "_on_session_start",
+    "get_default_runner",
 ]

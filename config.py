@@ -78,9 +78,10 @@ from __future__ import annotations
 
 import os
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import yaml
 
@@ -114,7 +115,7 @@ def probe_connect_host(candidate: str, port: int, timeout: float = 1.0) -> str |
         sock.connect((candidate, port))
         sock.close()
         return candidate
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         return None
 
 
@@ -659,9 +660,9 @@ def load_config(
 # ---------------------------------------------------------------------------
 
 __all__ = [
-    "NodeServerConfig",
-    "load_config",
     "DEFAULT_CONFIG_PATH",
     "DEFAULT_TOKEN_STORE_PATH",
     "ConfigError",
+    "NodeServerConfig",
+    "load_config",
 ]

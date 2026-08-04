@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from typing import Callable, Deque
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class _RateLimiter:
     :func:`hermes_nodes_plugin.server.create_app`.
     """
 
-    __slots__ = ("_max_calls", "_window_seconds", "_clock", "_windows")
+    __slots__ = ("_clock", "_max_calls", "_window_seconds", "_windows")
 
     def __init__(
         self,
@@ -96,7 +96,7 @@ class _RateLimiter:
         # node's deque empties, so memory is O(active_nodes *
         # max_calls) at worst — an "active" node is one with at
         # least one call inside the current window.
-        self._windows: dict[str, Deque[float]] = {}
+        self._windows: dict[str, deque[float]] = {}
 
         if self._max_calls <= 0:
             # Fail-open. A warning is logged so a typo'd

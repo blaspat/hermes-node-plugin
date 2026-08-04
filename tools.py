@@ -18,11 +18,9 @@ find any nodes. The HTTP endpoint is always authoritative.
 
 from __future__ import annotations
 
-
 import json
 import logging
 import time
-
 from pathlib import Path
 from typing import Any
 
@@ -56,9 +54,7 @@ def _should_retry(status_code: int, reason: str = "") -> bool:
     """
     if status_code >= 500:
         return True
-    if "not connected" in reason.lower():
-        return True
-    return False
+    return "not connected" in reason.lower()
 
 
 def _read_internal_token() -> str | None:
@@ -439,7 +435,7 @@ def node_list(args: dict, **kw: Any) -> str:
 # Public symbols.
 __all__ = [
     "node_exec",
+    "node_list",
     "node_read",
     "node_write",
-    "node_list",
 ]

@@ -34,9 +34,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Iterable
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     # Imported only for the type-checker; ``from __future__ import
@@ -74,7 +75,7 @@ def _now_utc() -> datetime:
     Centralised so tests can monkeypatch it (Task 2.5 acceptance
     explicitly tests heartbeat age, which depends on a clock).
     """
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -468,7 +469,7 @@ class NodeRegistry:
         # See __len__ note: best-effort snapshot, not lock-safe.
         return name in self._connections
 
-    def __iter__(self) -> Iterable[str]:
+    def __iter__(self) -> Iterator[str]:
         # See __len__ note: best-effort snapshot, not lock-safe.
         # The dict may be mutated between tuple() construction and the
         # caller's first next(); iterate promptly and do not rely on the

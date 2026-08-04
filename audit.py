@@ -115,10 +115,11 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final, Mapping
+from typing import Any, Final
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +347,7 @@ class AuditWriter:
         # with microsecond precision + explicit UTC offset; ``+00:00``
         # is identical to ``Z`` semantically and easier to read in
         # tooling that doesn't know the ``Z`` alias.
-        when = ts if ts is not None else datetime.now(timezone.utc)
+        when = ts if ts is not None else datetime.now(UTC)
         row: dict[str, Any] = {
             "ts": when.isoformat(),
             "node": node,
@@ -708,9 +709,6 @@ def reset_default_audit_writer() -> None:
 
 
 __all__ = [
-    "AuditConfig",
-    "AuditError",
-    "AuditWriter",
     "DEFAULT_AUDIT_LOG_PATH",
     "DEFAULT_KEEP",
     "DEFAULT_MAX_BYTES",
@@ -721,6 +719,9 @@ __all__ = [
     "STATUS_NOT_CONNECTED",
     "STATUS_OK",
     "STATUS_TIMEOUT",
+    "AuditConfig",
+    "AuditError",
+    "AuditWriter",
     "default_audit_writer",
     "reset_default_audit_writer",
 ]

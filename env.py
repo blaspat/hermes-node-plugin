@@ -47,12 +47,11 @@ pair already documents.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from cryptography.fernet import Fernet
-
 
 # Canonical location of the operator's dotenv. Matches the location
 # Hermes itself reads on startup; a default-mode Hermes install

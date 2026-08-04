@@ -252,7 +252,9 @@ class TestWaiterCancelled:
 
         from hermes_node_plugin.registry import _WaiterCancelled  # noqa: F401
         from hermes_node_plugin.wsserver import server as server_mod
-        from hermes_node_plugin.wsserver.server import _verify_internal_auth  # noqa: F401
+        from hermes_node_plugin.wsserver.server import (
+            _verify_internal_auth,  # noqa: F401
+        )
         source = inspect.getsource(server_mod)
         assert "503" in source, (
             "wsserver/server.py does not contain the string '503' — "

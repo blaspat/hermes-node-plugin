@@ -181,7 +181,7 @@ def register(ctx) -> None:
         _auto_logger.info(msg)
         if to_stdout:
             print(
-                f"[{_datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}",
+                f"[{_datetime.datetime.now(tz=_datetime.UTC):%Y-%m-%d %H:%M:%S}] {msg}",
                 flush=True,
             )
 

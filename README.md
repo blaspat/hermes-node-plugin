@@ -5,6 +5,7 @@ A Hermes Agent plugin that turns any Hermes profile into a “brain” to comman
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Core Features](#core-features)
+- [End-to-End Encryption](#end-to-end-encryption)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [FAQ](#faq)
@@ -32,6 +33,19 @@ plugins:
 - `node_read(target, path)`: read a file on a paired node (auto-retries on disconnect).
 - `node_write(target, path, content, mode="overwrite")`: write a file on a paired node (auto-retries on disconnect).
 - `node_list()`: list paired nodes and their connection state.
+
+## End-to-End Encryption
+
+After pairing, all operational messages (`exec`, `read`, `write`, and their results) are encrypted with a per-session AES-256-GCM key derived from an X25519 ECDH handshake. The pairing token is **never transmitted on the wire** after initial pairing.
+
+| Property | How |
+|---|---|
+| **Token never on wire** | Only HMAC proofs are exchanged — the token is mixed into key derivation via HKDF |
+| **Forward secrecy** | New ephemeral X25519 keys per session — old sessions can't be retroactively decrypted |
+| **MITM resistance** | Without the token, an attacker can't forge the HMAC proof → `auth_err` (4001) |
+| **Backward compatible** | Nodes that don't send `e2e: true` in `hello` fall back to legacy plaintext auth automatically |
+
+See [`docs/e2e-spec.md`](docs/e2e-spec.md) for the full handshake protocol and cryptographic details.
 
 ## Usage
 
