@@ -331,12 +331,14 @@ def _major_compatible(declared: str) -> bool:
 
 
 async def _send_json_safe(websocket: WebSocket, payload: dict[str, Any]) -> None:
-    """Send JSON, swallowing client-gone errors."""
+    """Send JSON without allowing send failures to crash the WS handler."""
     try:
-        await websocket.send_json(payload)
-    except (WebSocketDisconnect, RuntimeError) as exc:
-        logger.debug(
-            "send_json after client disconnect (%s); payload dropped", exc
+        await asyncio.wait_for(websocket.send_json(payload), timeout=5.0)
+    except Exception as exc:
+        logger.warning(
+            "WebSocket JSON send failed type=%r: %s",
+            payload.get("type"),
+            exc,
         )
 
 
@@ -633,6 +635,7 @@ def create_app(
             e2e_session_key = _e2e.derive_session_key(e2e_handshake_key, session_id)
             server_proof = _e2e.compute_server_proof(e2e_handshake_key)
             is_valid = True  # proof verified — skip token store check
+            logger.warning("E2E proof verified for %r session=%s", auth.node_name, session_id)
         else:
             # Legacy auth — validate token
             is_valid = False
@@ -667,11 +670,18 @@ def create_app(
             remote_addr=remote_addr,
         )
         previous = await registry.register(conn)
+        logger.warning(
+            "node registered: name=%r session=%s previous=%s",
+            auth.node_name,
+            session_id,
+            previous.session_id if previous is not None else "none",
+        )
         if previous is not None and previous.websocket is not websocket:
             await _safe_close(previous.websocket, 1000)  # WS_1000_NORMAL_CLOSURE
 
         if e2e_session_key is not None:
-            conn.e2e_session_key = e2e_session_key  # type: ignore[attr-defined]
+            object.__setattr__(conn, "e2e_session_key", e2e_session_key)
+            logger.warning("sending E2E auth_ok: name=%r session=%s", auth.node_name, session_id)
             await _send_json_safe(
                 websocket,
                 _build_auth_ok(
@@ -679,6 +689,7 @@ def create_app(
                     proof=_e2e.encode_b64(server_proof),
                 ),
             )
+            logger.warning("sent E2E auth_ok: name=%r session=%s", auth.node_name, session_id)
         else:
             await _send_json_safe(websocket, _build_auth_ok(session_id))
 
