@@ -32,15 +32,17 @@ WebSocket close codes are taken from PROTOCOL §4 verbatim.
 from __future__ import annotations
 
 import asyncio
+import base64 as _base64
 import hmac
 import json
 import logging
 import os
 import secrets
+import tempfile
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -58,7 +60,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from ..config import NodeServerConfig
 from ..errors import TokenStoreError
 from ..ratelimit import _RateLimiter
-from ..registry import NodeConnection, NodeRegistry, _WaiterCancelled
+from ..registry import ChunkState, NodeConnection, NodeRegistry, _WaiterCancelled
 from ..tokens import TokenStore, token_store_from_config
 from .handlers import route_inbound
 
@@ -225,6 +227,287 @@ class _AuthMessage(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# exec_chunk helpers (issue #116)
+# ---------------------------------------------------------------------------
+
+
+def _chunk_dir_total_bytes(chunk_dir: str) -> int:
+    """Return the total size in bytes of all ``.chunk`` files in ``chunk_dir``.
+
+    Runs synchronously — callers should wrap in ``asyncio.to_thread`` when
+    the directory may contain large numbers of files.
+    """
+    import os as _os
+
+    total = 0
+    try:
+        for entry in _os.scandir(chunk_dir):
+            if entry.is_file() and entry.name.endswith(".chunk"):
+                try:
+                    total += entry.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
+
+
+async def _handle_exec_chunk(
+    registry: NodeRegistry,
+    node_name: str,
+    raw: dict[str, Any],
+    config: NodeServerConfig,
+) -> None:
+    """Process an inbound ``exec_chunk`` message from a connected node.
+
+    The node streams a large exec result in base64-encoded chunks.
+    The server assembles them into a temporary file on disk and, when
+    the final chunk arrives, completes the waiter with a reference to
+    the temp file (rather than inlining the full output).
+
+    Schema per PROTOCOL §3.7:
+
+        {
+          "type": "exec_chunk",
+          "id": "<request_id>",
+          "data": "<base64>",
+          "more": true|false,
+          "exit_code": <int>,       // only meaningful on more=false
+          "status": "ok"|"timeout", // only meaningful on more=false
+          "duration_ms": <int>,     // only meaningful on more=false
+          "truncated": <bool>,      // only meaningful on more=false
+        }
+    """
+    import time as _time
+
+    request_id = raw.get("id")
+    if not isinstance(request_id, str) or not request_id:
+        logger.warning(
+            "exec_chunk from %r missing or invalid request_id: %r",
+            node_name,
+            request_id,
+        )
+        return
+
+    data_b64 = raw.get("data")
+    if not isinstance(data_b64, str) or not data_b64:
+        logger.warning(
+            "exec_chunk from %r id=%r missing or invalid data",
+            node_name,
+            request_id,
+        )
+        return
+
+    more = raw.get("more", True)
+
+    # -- Decode the chunk data -------------------------------------------
+    try:
+        chunk_bytes = _base64.b64decode(data_b64)
+    except Exception:
+        logger.warning(
+            "exec_chunk from %r id=%r base64 decode failed",
+            node_name,
+            request_id,
+        )
+        return
+
+    # -- Get or create ChunkState ----------------------------------------
+    cs = await registry.get_chunk_state(node_name, request_id)
+    if cs is None:
+        # First chunk — create a temp file and ChunkState.
+        # Check the total size cap before creating.
+        if config.exec_chunk_max_total_mb > 0:
+            total_bytes = await asyncio.to_thread(
+                _chunk_dir_total_bytes, config.exec_chunk_dir
+            )
+            cap_bytes = config.exec_chunk_max_total_mb * 1024 * 1024
+            if total_bytes + len(chunk_bytes) > cap_bytes:
+                logger.warning(
+                    "exec_chunk from %r id=%r rejected: total chunk dir size "
+                    "%d bytes would exceed cap of %d MiB",
+                    node_name,
+                    request_id,
+                    total_bytes + len(chunk_bytes),
+                    config.exec_chunk_max_total_mb,
+                )
+                # Complete the waiter with a size-limit error so the caller
+                # doesn't hang.
+                await registry.complete_waiter(
+                    node_name,
+                    request_id,
+                    {
+                        "status": "error",
+                        "reason": "chunk_size_limit",
+                        "total_bytes": total_bytes,
+                        "cap_mb": config.exec_chunk_max_total_mb,
+                    },
+                )
+                return
+
+        fd, path = tempfile.mkstemp(
+            suffix=".chunk", prefix="exec-", dir=config.exec_chunk_dir
+        )
+        file_handle = os.fdopen(fd, "wb")
+        cs = ChunkState(
+            file=file_handle,
+            path=path,
+            last_chunk_at=_time.monotonic(),
+            total_bytes=0,
+        )
+        await registry.set_chunk_state(node_name, request_id, cs)
+
+    # -- Append data to the temp file ------------------------------------
+    try:
+        cs.file.write(chunk_bytes)
+        cs.file.flush()
+    except Exception:
+        logger.warning(
+            "exec_chunk from %r id=%r write to temp file failed",
+            node_name,
+            request_id,
+        )
+        await registry.remove_chunk_state(node_name, request_id)
+        with suppress(Exception):
+            cs.file.close()
+        with suppress(Exception):
+            Path(cs.path).unlink(missing_ok=True)
+        return
+
+    cs.total_bytes += len(chunk_bytes)
+    cs.last_chunk_at = _time.monotonic()
+    await registry.set_chunk_state(node_name, request_id, cs)
+
+    # -- If more chunks are coming, we're done for now -------------------
+    if more:
+        return
+
+    # -- Final chunk — close file, complete waiter ----------------------
+    await registry.remove_chunk_state(node_name, request_id)
+    with suppress(Exception):
+        cs.file.close()
+
+    exit_code = raw.get("exit_code", 0)
+    status = raw.get("status", "ok")
+    duration_ms = raw.get("duration_ms", 0)
+    truncated = raw.get("truncated", False)
+
+    await registry.complete_waiter(
+        node_name,
+        request_id,
+        {
+            "output_file": cs.path,
+            "exit_code": exit_code,
+            "status": status,
+            "duration_ms": duration_ms,
+            "truncated": truncated,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chunk timeout sweep (issue #116)
+# ---------------------------------------------------------------------------
+
+
+async def _chunk_timeout_sweep(
+    registry: NodeRegistry,
+    config: NodeServerConfig,
+    *,
+    interval: float = 5.0,
+) -> None:
+    """Background task that periodically prunes stale exec_chunk states.
+
+    Every *interval* seconds, scans the registry's ``_chunk_states`` for
+    entries whose ``last_chunk_at`` is older than
+    ``config.exec_chunk_timeout_s`` seconds.  Each stale entry is removed,
+    its temp file closed and unlinked, and the corresponding waiter
+    completed with a timeout error (code 408).
+    """
+    import time as _time
+
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            now = _time.monotonic()
+            timeout_s = config.exec_chunk_timeout_s
+
+            # Snapshot stale keys under the lock.
+            stale_keys: list[tuple[str, str]] = []
+            stale_states: list[ChunkState] = []
+            async with registry._lock:
+                for (key, cs) in list(registry._chunk_states.items()):
+                    if now - cs.last_chunk_at > timeout_s:
+                        stale_keys.append(key)
+                        stale_state = registry._chunk_states.pop(key, None)
+                        if stale_state is not None:
+                            stale_states.append(stale_state)
+
+            for (node_name, request_id), cs in zip(stale_keys, stale_states):
+                # Close the file handle.
+                with suppress(Exception):
+                    cs.file.close()
+                # Unlink the temp file.
+                with suppress(Exception):
+                    Path(cs.path).unlink(missing_ok=True)
+                # Complete the waiter (if one is still waiting).
+                await registry.complete_waiter(
+                    node_name,
+                    request_id,
+                    {
+                        "status": "error",
+                        "code": 408,
+                        "reason": (
+                            f"exec_chunk timed out after {timeout_s}s "
+                            f"without a closing chunk"
+                        ),
+                    },
+                )
+                logger.warning(
+                    "exec_chunk timeout sweep: cleaned up stale chunk "
+                    "node=%r id=%r age=%.1fs",
+                    node_name,
+                    request_id,
+                    now - cs.last_chunk_at,
+                )
+
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("exec_chunk timeout sweep error; continuing")
+
+
+# ---------------------------------------------------------------------------
+# Orphan chunk cleanup (issue #116)
+# ---------------------------------------------------------------------------
+
+
+async def _cleanup_orphan_chunks(chunk_dir: Path) -> int:
+    """Remove any ``*.chunk`` files left behind by a previous crash.
+
+    Runs the directory scan in a thread-pool executor so it never blocks
+    the event loop on a slow filesystem.  Returns the count of removed
+    files.
+    """
+    import os as _os
+
+    def _scan_and_unlink() -> int:
+        count = 0
+        try:
+            for entry in _os.scandir(str(chunk_dir)):
+                if entry.is_file() and entry.name.endswith(".chunk"):
+                    try:
+                        _os.unlink(entry.path)
+                        count += 1
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return count
+
+    return await asyncio.to_thread(_scan_and_unlink)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -235,6 +518,7 @@ def _build_hello_ack(
     *,
     ecdh_pub: str | None = None,
     salt: str | None = None,
+    capabilities: list[str] | None = None,
 ) -> dict[str, Any]:
     msg: dict[str, Any] = {
         "type": "hello_ack",
@@ -246,6 +530,8 @@ def _build_hello_ack(
         msg["ecdh_pub"] = ecdh_pub
     if salt is not None:
         msg["salt"] = salt
+    if capabilities is not None:
+        msg["capabilities"] = capabilities
     return msg
 
 
@@ -428,9 +714,33 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Startup: generate the internal auth token shared with tools.py."""
+        """Startup: generate internal auth token, start chunk sweep, cleanup orphans."""
         app.state.internal_token = _ensure_internal_token()
-        yield
+
+        # Start the exec_chunk timeout sweep as a background task.
+        sweep_task = asyncio.create_task(
+            _chunk_timeout_sweep(registry, config, interval=5.0)
+        )
+
+        # Clean up orphan chunk files from a previous crash.
+        chunk_dir = Path(config.exec_chunk_dir)
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        cleaned = await _cleanup_orphan_chunks(chunk_dir)
+        if cleaned:
+            logger.warning(
+                "lifespan: cleaned up %d orphan chunk files from %s",
+                cleaned,
+                chunk_dir,
+            )
+
+        try:
+            yield
+        finally:
+            sweep_task.cancel()
+            try:
+                await sweep_task
+            except asyncio.CancelledError:
+                pass
 
     app = FastAPI(title="hermes-node WSS server", lifespan=_lifespan)
     app.state.token_store = token_store
@@ -540,18 +850,19 @@ def create_app(
                         session_id,
                         ecdh_pub=_e2e.encode_public_key(server_kp.public),
                         salt=_e2e.encode_b64(salt_bytes),
+                        capabilities=["exec_chunk"],
                     ),
                 )
             else:
                 await _send_json_safe(
                     websocket,
-                    _build_hello_ack(hello.protocol_version, session_id),
+                    _build_hello_ack(hello.protocol_version, session_id, capabilities=["exec_chunk"]),
                 )
         else:
             e2e_handshake_key = None
             await _send_json_safe(
                 websocket,
-                _build_hello_ack(hello.protocol_version, session_id),
+                _build_hello_ack(hello.protocol_version, session_id, capabilities=["exec_chunk"]),
             )
 
         # -- 2. auth ---------------------------------------------------------
@@ -742,6 +1053,12 @@ def create_app(
                     )
                     await _safe_close(websocket, CLOSE_RATE_LIMIT_EXCEEDED)
                     return
+                # Handle exec_chunk streaming before general routing.
+                if raw.get("type") == "exec_chunk":
+                    await _handle_exec_chunk(
+                        registry, auth.node_name, raw, config
+                    )
+                    continue
                 # Route to the waiter (if any).
                 await route_inbound(registry, auth.node_name, raw)
         except WebSocketDisconnect:
@@ -1022,6 +1339,7 @@ __all__ = [
     "CLOSE_RATE_LIMIT_EXCEEDED",
     "PROTOCOL_MAJOR",
     "_ensure_internal_token",
+    "_handle_exec_chunk",
     "_internal_token_path",
     "_read_token_from_disk",
     "_safe_close",

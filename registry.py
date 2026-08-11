@@ -35,8 +35,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -67,6 +69,30 @@ class _WaiterCancelled(BaseException):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+@dataclass
+class ChunkState:
+    """In-flight state for a chunked exec result being assembled on disk.
+
+    Created when the first ``exec_chunk`` arrives. Each subsequent chunk
+    appends data to the file. When ``more=false`` arrives, the file is
+    closed and the chunk state is removed from the registry.
+
+    Attributes:
+        file: An open file handle (returned by :func:`tempfile.mkstemp`).
+            Written to by the server and read by the waiter completer.
+        path: The absolute filesystem path of the temp file.
+        last_chunk_at: Monotonic timestamp of the most recent chunk.
+            Used by the timeout sweep to prune abandoned uploads.
+        total_bytes: Running count of bytes written so far. Compared
+            against the per-chunk and total-MiB caps.
+    """
+
+    file: Any
+    path: str
+    last_chunk_at: float
+    total_bytes: int
 
 
 def _now_utc() -> datetime:
@@ -186,6 +212,11 @@ class NodeRegistry:
         # dataclass) because the dataclass is frozen and waiter count
         # changes constantly.
         self._waiters: dict[tuple[str, str], asyncio.Future[Any]] = {}
+        # In-flight exec_chunk state, keyed by (node_name, request_id).
+        # The server's dispatch loop creates entries when the first chunk
+        # arrives and removes them when the final chunk arrives or the
+        # connection dies.  See ``fail_node_chunks`` and the timeout sweep.
+        self._chunk_states: dict[tuple[str, str], ChunkState] = {}
 
     async def register(self, conn: NodeConnection) -> NodeConnection | None:
         """Install ``conn`` under ``conn.name``.
@@ -211,6 +242,7 @@ class NodeRegistry:
             # cancellation callbacks (which may themselves await on
             # the registry) don't deadlock.
             await self.fail_node_waiters(conn.name, "connection_replaced")
+            await self.fail_node_chunks(conn.name)
         return previous
 
     async def unregister(
@@ -269,6 +301,7 @@ class NodeRegistry:
             # remove is guaranteed to succeed — no default needed.
             del self._connections[name]
         await self.fail_node_waiters(name, "node_disconnected")
+        await self.fail_node_chunks(name)
         return current
 
     async def get(self, name: str) -> NodeConnection | None:
@@ -456,6 +489,56 @@ class NodeRegistry:
             )
         return woken
 
+    # -- chunk state methods (issue #116) ----------------------------------
+
+    async def get_chunk_state(self, name: str, request_id: str) -> ChunkState | None:
+        """Return the :class:`ChunkState` for ``(name, request_id)``, or ``None``."""
+        async with self._lock:
+            return self._chunk_states.get((name, request_id))
+
+    async def set_chunk_state(
+        self, name: str, request_id: str, state: ChunkState
+    ) -> None:
+        """Store a :class:`ChunkState` for ``(name, request_id)``."""
+        async with self._lock:
+            self._chunk_states[(name, request_id)] = state
+
+    async def remove_chunk_state(self, name: str, request_id: str) -> ChunkState | None:
+        """Remove and return the :class:`ChunkState` for ``(name, request_id)``."""
+        async with self._lock:
+            return self._chunk_states.pop((name, request_id), None)
+
+    async def fail_node_chunks(self, name: str) -> int:
+        """Close file handles and unlink temp files for every chunk of ``name``.
+
+        Called when a node disconnects — abandoned chunk uploads leave
+        open file descriptors and orphan temp files if not cleaned up.
+
+        Returns:
+            The number of chunk states that were cleaned up.
+        """
+        async with self._lock:
+            keys = [k for k in self._chunk_states if k[0] == name]
+            states: list[ChunkState] = []
+            for k in keys:
+                cs = self._chunk_states.pop(k, None)
+                if cs is not None:
+                    states.append(cs)
+        cleaned = 0
+        for cs in states:
+            with suppress(Exception):
+                cs.file.close()
+            with suppress(Exception):
+                Path(cs.path).unlink(missing_ok=True)
+            cleaned += 1
+        if cleaned:
+            logger.debug(
+                "failed %d exec_chunk state(s) for node %r",
+                cleaned,
+                name,
+            )
+        return cleaned
+
     def __len__(self) -> int:
         # Synchronous convenience for tests / debug printing. Not part
         # of the public API. Reads without the async lock: CPython dict
@@ -477,4 +560,4 @@ class NodeRegistry:
         return iter(tuple(self._connections))
 
 
-__all__ = ["NodeConnection", "NodeRegistry"]
+__all__ = ["ChunkState", "NodeConnection", "NodeRegistry"]
