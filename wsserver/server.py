@@ -42,7 +42,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -367,14 +367,10 @@ async def _handle_exec_chunk(
             request_id,
         )
         await registry.remove_chunk_state(node_name, request_id)
-        try:
+        with suppress(Exception):
             cs.file.close()
-        except Exception:
-            pass
-        try:
+        with suppress(Exception):
             Path(cs.path).unlink(missing_ok=True)
-        except Exception:
-            pass
         return
 
     cs.total_bytes += len(chunk_bytes)
@@ -387,10 +383,8 @@ async def _handle_exec_chunk(
 
     # -- Final chunk — close file, complete waiter ----------------------
     await registry.remove_chunk_state(node_name, request_id)
-    try:
+    with suppress(Exception):
         cs.file.close()
-    except Exception:
-        pass
 
     exit_code = raw.get("exit_code", 0)
     status = raw.get("status", "ok")
@@ -450,15 +444,11 @@ async def _chunk_timeout_sweep(
 
             for (node_name, request_id), cs in zip(stale_keys, stale_states):
                 # Close the file handle.
-                try:
+                with suppress(Exception):
                     cs.file.close()
-                except Exception:
-                    pass
                 # Unlink the temp file.
-                try:
+                with suppress(Exception):
                     Path(cs.path).unlink(missing_ok=True)
-                except Exception:
-                    pass
                 # Complete the waiter (if one is still waiting).
                 await registry.complete_waiter(
                     node_name,

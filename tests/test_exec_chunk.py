@@ -6,11 +6,9 @@ import asyncio
 import json
 import os
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,14 +55,10 @@ class TestChunkStateLifecycle:
         _run(_test())
 
         # Clean up.
-        try:
+        with suppress(Exception):
             fh.close()
-        except Exception:
-            pass
-        try:
+        with suppress(Exception):
             Path(path).unlink(missing_ok=True)
-        except Exception:
-            pass
 
     def test_get_nonexistent_returns_none(self) -> None:
         from hermes_node_plugin.registry import NodeRegistry
@@ -107,7 +101,7 @@ class TestFailNodeChunks:
             for i in range(3):
                 p = tmp_path / f"test-chunk-{i}.chunk"
                 p.write_text(f"data-{i}")
-                fh = open(str(p), "rb+")
+                fh = open(str(p), "rb+")  # noqa: ASYNC230,SIM115
                 file_handles.append(fh)
                 file_paths.append(str(p))
                 cs = ChunkState(
@@ -139,7 +133,7 @@ class TestFailNodeChunks:
         async def _test():
             p_a = tmp_path / "a.chunk"
             p_a.write_text("a")
-            fh_a = open(str(p_a), "rb+")
+            fh_a = open(str(p_a), "rb+")  # noqa: ASYNC230,SIM115
             await registry.set_chunk_state(
                 "node-a", "r1",
                 ChunkState(file=fh_a, path=str(p_a),
@@ -147,7 +141,7 @@ class TestFailNodeChunks:
             )
             p_b = tmp_path / "b.chunk"
             p_b.write_text("b")
-            fh_b = open(str(p_b), "rb+")
+            fh_b = open(str(p_b), "rb+")  # noqa: ASYNC230,SIM115
             await registry.set_chunk_state(
                 "node-b", "r1",
                 ChunkState(file=fh_b, path=str(p_b),
@@ -336,22 +330,14 @@ class TestChunkStateConcurrent:
 
             await registry.remove_chunk_state("n1", "r1")
             await registry.remove_chunk_state("n2", "r2")
-            try:
+            with suppress(Exception):
                 fh.close()
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 fh2.close()
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 Path(path).unlink(missing_ok=True)
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 Path(path2).unlink(missing_ok=True)
-            except Exception:
-                pass
 
         _run(_test())
 

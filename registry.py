@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -525,14 +526,10 @@ class NodeRegistry:
                     states.append(cs)
         cleaned = 0
         for cs in states:
-            try:
+            with suppress(Exception):
                 cs.file.close()
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 Path(cs.path).unlink(missing_ok=True)
-            except Exception:
-                pass
             cleaned += 1
         if cleaned:
             logger.debug(

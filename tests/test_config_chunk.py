@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import pytest
-
 from hermes_node_plugin.errors import ConfigError
-
 
 # ---------------------------------------------------------------------------
 # Defaults

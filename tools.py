@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -210,18 +211,14 @@ def _node_exec_impl(
                 try:
                     output = Path(output_file).read_text(encoding="utf-8")
                 except Exception as e:
-                    try:
+                    with suppress(Exception):
                         Path(output_file).unlink(missing_ok=True)
-                    except Exception:
-                        pass
                     return json.dumps({
                         "error": f"failed to read exec_chunk output file: {e}",
                     })
                 # Unlink the temp file after a successful read.
-                try:
+                with suppress(Exception):
                     Path(output_file).unlink(missing_ok=True)
-                except Exception:
-                    pass
                 return json.dumps({
                     "output": output,
                     "returncode": exec_result.get("exit_code", 0),
