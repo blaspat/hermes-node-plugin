@@ -411,6 +411,113 @@ async def _handle_exec_chunk(
 
 
 # ---------------------------------------------------------------------------
+# Chunk timeout sweep (issue #116)
+# ---------------------------------------------------------------------------
+
+
+async def _chunk_timeout_sweep(
+    registry: NodeRegistry,
+    config: NodeServerConfig,
+    *,
+    interval: float = 5.0,
+) -> None:
+    """Background task that periodically prunes stale exec_chunk states.
+
+    Every *interval* seconds, scans the registry's ``_chunk_states`` for
+    entries whose ``last_chunk_at`` is older than
+    ``config.exec_chunk_timeout_s`` seconds.  Each stale entry is removed,
+    its temp file closed and unlinked, and the corresponding waiter
+    completed with a timeout error (code 408).
+    """
+    import time as _time
+
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            now = _time.monotonic()
+            timeout_s = config.exec_chunk_timeout_s
+
+            # Snapshot stale keys under the lock.
+            stale_keys: list[tuple[str, str]] = []
+            stale_states: list[ChunkState] = []
+            async with registry._lock:
+                for (key, cs) in list(registry._chunk_states.items()):
+                    if now - cs.last_chunk_at > timeout_s:
+                        stale_keys.append(key)
+                        stale_state = registry._chunk_states.pop(key, None)
+                        if stale_state is not None:
+                            stale_states.append(stale_state)
+
+            for (node_name, request_id), cs in zip(stale_keys, stale_states):
+                # Close the file handle.
+                try:
+                    cs.file.close()
+                except Exception:
+                    pass
+                # Unlink the temp file.
+                try:
+                    Path(cs.path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                # Complete the waiter (if one is still waiting).
+                await registry.complete_waiter(
+                    node_name,
+                    request_id,
+                    {
+                        "status": "error",
+                        "code": 408,
+                        "reason": (
+                            f"exec_chunk timed out after {timeout_s}s "
+                            f"without a closing chunk"
+                        ),
+                    },
+                )
+                logger.warning(
+                    "exec_chunk timeout sweep: cleaned up stale chunk "
+                    "node=%r id=%r age=%.1fs",
+                    node_name,
+                    request_id,
+                    now - cs.last_chunk_at,
+                )
+
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("exec_chunk timeout sweep error; continuing")
+
+
+# ---------------------------------------------------------------------------
+# Orphan chunk cleanup (issue #116)
+# ---------------------------------------------------------------------------
+
+
+async def _cleanup_orphan_chunks(chunk_dir: Path) -> int:
+    """Remove any ``*.chunk`` files left behind by a previous crash.
+
+    Runs the directory scan in a thread-pool executor so it never blocks
+    the event loop on a slow filesystem.  Returns the count of removed
+    files.
+    """
+    import os as _os
+
+    def _scan_and_unlink() -> int:
+        count = 0
+        try:
+            for entry in _os.scandir(str(chunk_dir)):
+                if entry.is_file() and entry.name.endswith(".chunk"):
+                    try:
+                        _os.unlink(entry.path)
+                        count += 1
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return count
+
+    return await asyncio.to_thread(_scan_and_unlink)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -617,9 +724,33 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Startup: generate the internal auth token shared with tools.py."""
+        """Startup: generate internal auth token, start chunk sweep, cleanup orphans."""
         app.state.internal_token = _ensure_internal_token()
-        yield
+
+        # Start the exec_chunk timeout sweep as a background task.
+        sweep_task = asyncio.create_task(
+            _chunk_timeout_sweep(registry, config, interval=5.0)
+        )
+
+        # Clean up orphan chunk files from a previous crash.
+        chunk_dir = Path(config.exec_chunk_dir)
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        cleaned = await _cleanup_orphan_chunks(chunk_dir)
+        if cleaned:
+            logger.warning(
+                "lifespan: cleaned up %d orphan chunk files from %s",
+                cleaned,
+                chunk_dir,
+            )
+
+        try:
+            yield
+        finally:
+            sweep_task.cancel()
+            try:
+                await sweep_task
+            except asyncio.CancelledError:
+                pass
 
     app = FastAPI(title="hermes-node WSS server", lifespan=_lifespan)
     app.state.token_store = token_store
