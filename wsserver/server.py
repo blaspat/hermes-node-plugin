@@ -356,10 +356,11 @@ async def _handle_exec_chunk(
         )
         await registry.set_chunk_state(node_name, request_id, cs)
 
-    # -- Append data to the temp file ------------------------------------
+    # -- Append data to the temp file (non-blocking — disk I/O in executor) -
+    loop = asyncio.get_running_loop()
     try:
-        cs.file.write(chunk_bytes)
-        cs.file.flush()
+        await loop.run_in_executor(None, cs.file.write, chunk_bytes)
+        await loop.run_in_executor(None, cs.file.flush)
     except Exception:
         logger.warning(
             "exec_chunk from %r id=%r write to temp file failed",
