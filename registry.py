@@ -37,6 +37,7 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -67,6 +68,30 @@ class _WaiterCancelled(BaseException):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+@dataclass
+class ChunkState:
+    """In-flight state for a chunked exec result being assembled on disk.
+
+    Created when the first ``exec_chunk`` arrives. Each subsequent chunk
+    appends data to the file. When ``more=false`` arrives, the file is
+    closed and the chunk state is removed from the registry.
+
+    Attributes:
+        file: An open file handle (returned by :func:`tempfile.mkstemp`).
+            Written to by the server and read by the waiter completer.
+        path: The absolute filesystem path of the temp file.
+        last_chunk_at: Monotonic timestamp of the most recent chunk.
+            Used by the timeout sweep to prune abandoned uploads.
+        total_bytes: Running count of bytes written so far. Compared
+            against the per-chunk and total-MiB caps.
+    """
+
+    file: Any
+    path: str
+    last_chunk_at: float
+    total_bytes: int
 
 
 def _now_utc() -> datetime:
@@ -477,4 +502,4 @@ class NodeRegistry:
         return iter(tuple(self._connections))
 
 
-__all__ = ["NodeConnection", "NodeRegistry"]
+__all__ = ["ChunkState", "NodeConnection", "NodeRegistry"]
