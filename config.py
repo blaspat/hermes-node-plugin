@@ -221,6 +221,28 @@ class NodeServerConfig:
     # Env var: ``HERMES_NODES_RETRY_BACKOFF_SECONDS``.
     retry_backoff_seconds: float = 2.0
 
+    # -- exec_chunk streaming (issue #116) ---------------------------------
+    # Directory where exec_chunk temp files are assembled. Must exist at
+    # server start (the lifespan creates it). Env var:
+    # ``HERMES_NODES_EXEC_CHUNK_DIR``.
+    exec_chunk_dir: str = "/tmp/hermes-exec-chunks"
+
+    # Max total size in MiB of all in-flight exec_chunk temp files.
+    # A new chunk that would push the total past this cap is rejected
+    # with a ``chunk_size_limit`` error frame. ``<= 0`` means unlimited.
+    # Env var: ``HERMES_NODES_EXEC_CHUNK_MAX_TOTAL_MB``.
+    exec_chunk_max_total_mb: int = 50
+
+    # Max age of an in-flight chunk (seconds). If a chunk sits unclosed
+    # for longer than this, the background sweep removes it and completes
+    # the waiter with a timeout error. Must be ``> 0``.
+    # Env var: ``HERMES_NODES_EXEC_CHUNK_TIMEOUT_S``.
+    exec_chunk_timeout_s: int = 30
+
+    # Max payload size (bytes) of a single exec_chunk message.
+    # Must be ``> 0``. Env var: ``HERMES_NODES_EXEC_CHUNK_SIZE``.
+    exec_chunk_size: int = 65536
+
     def __post_init__(self) -> None:
         # TLS partial-config is the most common deployment footgun: an
         # operator sets tls_cert_path but forgets tls_key_path (or vice
@@ -251,6 +273,17 @@ class NodeServerConfig:
             raise ConfigError(
                 "heartbeat_sweep_interval_seconds must be > 0, "
                 f"got {self.heartbeat_sweep_interval_seconds!r}"
+            )
+
+        if self.exec_chunk_timeout_s <= 0:
+            raise ConfigError(
+                f"exec_chunk_timeout_s must be > 0, got "
+                f"{self.exec_chunk_timeout_s!r}"
+            )
+        if self.exec_chunk_size <= 0:
+            raise ConfigError(
+                f"exec_chunk_size must be > 0, got "
+                f"{self.exec_chunk_size!r}"
             )
 
     # -- predicates ---------------------------------------------------------
@@ -581,6 +614,87 @@ def _build(
                     f"got {retry_backoff_val}"
                 )
 
+    # -- exec_chunk_dir (str) -------------------------------------------------
+    exec_chunk_dir_raw = _resolve_str(
+        key="exec_chunk_dir", env=env, file_data=file_data
+    )
+
+    # -- exec_chunk_max_total_mb (int, <=0 = unlimited) -----------------------
+    exec_chunk_max_raw: Any = None
+    exec_chunk_max_source = "default"
+    if env.get(_env_name("exec_chunk_max_total_mb")) is not None:
+        exec_chunk_max_raw = env[_env_name("exec_chunk_max_total_mb")]
+        exec_chunk_max_source = "env"
+    elif _read_file_value(file_data, "exec_chunk_max_total_mb") is not None:
+        exec_chunk_max_raw = _read_file_value(file_data, "exec_chunk_max_total_mb")
+        exec_chunk_max_source = "file"
+    exec_chunk_max_val: int | None = None
+    if exec_chunk_max_raw is not None:
+        if isinstance(exec_chunk_max_raw, str) and exec_chunk_max_raw.strip() == "":
+            exec_chunk_max_val = None
+        else:
+            try:
+                exec_chunk_max_val = int(exec_chunk_max_raw)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"{exec_chunk_max_source}: exec_chunk_max_total_mb must be an integer, "
+                    f"got {exec_chunk_max_raw!r}"
+                ) from exc
+
+    # -- exec_chunk_timeout_s (int, must be >0) ------------------------------
+    exec_chunk_timeout_raw: Any = None
+    exec_chunk_timeout_source = "default"
+    if env.get(_env_name("exec_chunk_timeout_s")) is not None:
+        exec_chunk_timeout_raw = env[_env_name("exec_chunk_timeout_s")]
+        exec_chunk_timeout_source = "env"
+    elif _read_file_value(file_data, "exec_chunk_timeout_s") is not None:
+        exec_chunk_timeout_raw = _read_file_value(file_data, "exec_chunk_timeout_s")
+        exec_chunk_timeout_source = "file"
+    exec_chunk_timeout_val: int | None = None
+    if exec_chunk_timeout_raw is not None:
+        if isinstance(exec_chunk_timeout_raw, str) and exec_chunk_timeout_raw.strip() == "":
+            exec_chunk_timeout_val = None
+        else:
+            try:
+                exec_chunk_timeout_val = int(exec_chunk_timeout_raw)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"{exec_chunk_timeout_source}: exec_chunk_timeout_s must be an integer, "
+                    f"got {exec_chunk_timeout_raw!r}"
+                ) from exc
+            if exec_chunk_timeout_val <= 0:
+                raise ConfigError(
+                    f"{exec_chunk_timeout_source}: exec_chunk_timeout_s must be > 0, "
+                    f"got {exec_chunk_timeout_val}"
+                )
+
+    # -- exec_chunk_size (int, must be >0) ----------------------------------
+    exec_chunk_size_raw: Any = None
+    exec_chunk_size_source = "default"
+    if env.get(_env_name("exec_chunk_size")) is not None:
+        exec_chunk_size_raw = env[_env_name("exec_chunk_size")]
+        exec_chunk_size_source = "env"
+    elif _read_file_value(file_data, "exec_chunk_size") is not None:
+        exec_chunk_size_raw = _read_file_value(file_data, "exec_chunk_size")
+        exec_chunk_size_source = "file"
+    exec_chunk_size_val: int | None = None
+    if exec_chunk_size_raw is not None:
+        if isinstance(exec_chunk_size_raw, str) and exec_chunk_size_raw.strip() == "":
+            exec_chunk_size_val = None
+        else:
+            try:
+                exec_chunk_size_val = int(exec_chunk_size_raw)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"{exec_chunk_size_source}: exec_chunk_size must be an integer, "
+                    f"got {exec_chunk_size_raw!r}"
+                ) from exc
+            if exec_chunk_size_val <= 0:
+                raise ConfigError(
+                    f"{exec_chunk_size_source}: exec_chunk_size must be > 0, "
+                    f"got {exec_chunk_size_val}"
+                )
+
     # Now assemble. We use a partial dict + NodeServerConfig defaults for
     # any key we didn't resolve — dataclass handles the "default" leg of
     # the precedence chain.
@@ -614,6 +728,14 @@ def _build(
         resolved["max_retries"] = max_retries_val
     if retry_backoff_val is not None:
         resolved["retry_backoff_seconds"] = retry_backoff_val
+    if exec_chunk_dir_raw is not None:
+        resolved["exec_chunk_dir"] = str(exec_chunk_dir_raw)
+    if exec_chunk_max_val is not None:
+        resolved["exec_chunk_max_total_mb"] = exec_chunk_max_val
+    if exec_chunk_timeout_val is not None:
+        resolved["exec_chunk_timeout_s"] = exec_chunk_timeout_val
+    if exec_chunk_size_val is not None:
+        resolved["exec_chunk_size"] = exec_chunk_size_val
 
     return NodeServerConfig(**resolved)
 
