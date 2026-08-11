@@ -202,6 +202,31 @@ def _node_exec_impl(
         # Normalise to {"output": str, "returncode": int}
         if result.get("status") == "ok":
             exec_result = result.get("exec_result", {})
+            # Dual-path: chunked exec produces a temp file; legacy exec
+            # returns stdout/stderr inline.
+            output_file = exec_result.get("output_file")
+            if output_file:
+                # Read from the temp file assembled by exec_chunk handler.
+                try:
+                    output = Path(output_file).read_text(encoding="utf-8")
+                except Exception as e:
+                    try:
+                        Path(output_file).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    return json.dumps({
+                        "error": f"failed to read exec_chunk output file: {e}",
+                    })
+                # Unlink the temp file after a successful read.
+                try:
+                    Path(output_file).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return json.dumps({
+                    "output": output,
+                    "returncode": exec_result.get("exit_code", 0),
+                })
+            # -- legacy path (stdout/stderr inline) --------------------
             output = exec_result.get("stdout", "")
             stderr = exec_result.get("stderr", "")
             if stderr:
