@@ -289,8 +289,15 @@ async def _handle_exec_chunk(
         )
         return
 
+    more = raw.get("more", True)
+
     data_b64 = raw.get("data")
-    if not isinstance(data_b64, str) or not data_b64:
+    # The final chunk (more=false) carries empty data by design — its
+    # payload is the exit_code/status/duration_ms/truncated metadata, not
+    # output bytes. Only intermediate chunks (more=true) must carry data.
+    # Rejecting empty data here would drop the completion metadata and
+    # strand the waiter until the per-call timeout.
+    if not isinstance(data_b64, str) or (not data_b64 and more):
         logger.warning(
             "exec_chunk from %r id=%r missing or invalid data",
             node_name,
@@ -298,9 +305,9 @@ async def _handle_exec_chunk(
         )
         return
 
-    more = raw.get("more", True)
-
     # -- Decode the chunk data -------------------------------------------
+    # base64.b64decode("") returns b"" (empty bytes), so an empty-data
+    # final chunk decodes cleanly and appends nothing.
     try:
         chunk_bytes = _base64.b64decode(data_b64)
     except Exception:
