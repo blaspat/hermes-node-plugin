@@ -301,6 +301,131 @@ class TestDualPathExec:
 
 
 # ---------------------------------------------------------------------------
+# _handle_exec_chunk — empty-data final chunk
+# ---------------------------------------------------------------------------
+
+
+class TestHandleExecChunkEmptyFinal:
+    """The final chunk (more=false) carries empty data by design — its payload
+    is the exit_code/status/duration_ms/truncated metadata. It must complete
+    the waiter rather than being rejected as "missing or invalid data".
+    """
+
+    def test_empty_final_after_intermediate(self, tmp_path: Path) -> None:
+        from hermes_node_plugin.config import NodeServerConfig
+        from hermes_node_plugin.registry import NodeRegistry
+        from hermes_node_plugin.wsserver.server import _handle_exec_chunk
+
+        registry = NodeRegistry()
+        cfg = NodeServerConfig(exec_chunk_dir=str(tmp_path))
+
+        async def _test():
+            waiter = await registry.register_waiter("node-a", "req-1")
+
+            # Intermediate chunk with data (more=true).
+            await _handle_exec_chunk(
+                registry,
+                "node-a",
+                {"id": "req-1", "data": "aGVsbG8=", "more": True},
+                cfg,
+            )
+            # Final chunk — empty data, metadata only.
+            await _handle_exec_chunk(
+                registry,
+                "node-a",
+                {
+                    "id": "req-1",
+                    "data": "",
+                    "more": False,
+                    "exit_code": 0,
+                    "status": "ok",
+                    "duration_ms": 42,
+                    "truncated": False,
+                },
+                cfg,
+            )
+
+            result = await asyncio.wait_for(waiter, timeout=5.0)
+            assert result["exit_code"] == 0
+            assert result["status"] == "ok"
+            assert result["duration_ms"] == 42
+            assert result["truncated"] is False
+            assert result["output_file"]
+
+            # Assembled output should contain the intermediate data.
+            with suppress(Exception):
+                assert "hello" in Path(result["output_file"]).read_text()
+                Path(result["output_file"]).unlink(missing_ok=True)
+
+        _run(_test())
+
+    def test_empty_final_as_only_chunk(self, tmp_path: Path) -> None:
+        from hermes_node_plugin.config import NodeServerConfig
+        from hermes_node_plugin.registry import NodeRegistry
+        from hermes_node_plugin.wsserver.server import _handle_exec_chunk
+
+        registry = NodeRegistry()
+        cfg = NodeServerConfig(exec_chunk_dir=str(tmp_path))
+
+        async def _test():
+            waiter = await registry.register_waiter("node-b", "req-2")
+
+            # A command with no output sends a single empty-data final chunk.
+            await _handle_exec_chunk(
+                registry,
+                "node-b",
+                {
+                    "id": "req-2",
+                    "data": "",
+                    "more": False,
+                    "exit_code": 7,
+                    "status": "error",
+                    "duration_ms": 10,
+                    "truncated": False,
+                },
+                cfg,
+            )
+
+            result = await asyncio.wait_for(waiter, timeout=5.0)
+            assert result["exit_code"] == 7
+            assert result["status"] == "error"
+            assert result["duration_ms"] == 10
+            # The temp file exists but is empty.
+            with suppress(Exception):
+                assert Path(result["output_file"]).read_text() == ""
+                Path(result["output_file"]).unlink(missing_ok=True)
+
+        _run(_test())
+
+    def test_empty_intermediate_still_rejected(self, tmp_path: Path) -> None:
+        from hermes_node_plugin.config import NodeServerConfig
+        from hermes_node_plugin.registry import NodeRegistry
+        from hermes_node_plugin.wsserver.server import _handle_exec_chunk
+
+        registry = NodeRegistry()
+        cfg = NodeServerConfig(exec_chunk_dir=str(tmp_path))
+
+        async def _test():
+            waiter = await registry.register_waiter("node-c", "req-3")
+
+            # An intermediate chunk (more=true) with empty data is still
+            # invalid — it must not create a chunk state.
+            await _handle_exec_chunk(
+                registry,
+                "node-c",
+                {"id": "req-3", "data": "", "more": True},
+                cfg,
+            )
+
+            # No chunk state should have been created.
+            assert await registry.get_chunk_state("node-c", "req-3") is None
+            # And the waiter must still be pending.
+            assert not waiter.done()
+
+        _run(_test())
+
+
+# ---------------------------------------------------------------------------
 # Chunk state concurrent set (stress-test)
 # ---------------------------------------------------------------------------
 
