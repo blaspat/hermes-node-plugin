@@ -204,6 +204,49 @@ class TestToolsAuth:
 
 
 # ---------------------------------------------------------------------------
+# Regression — touch_last_used stamps E2E connects
+# ---------------------------------------------------------------------------
+
+
+class TestTouchLastUsed:
+    """E2E nodes never call validate(), so last_used_at needs a direct stamp."""
+
+    def _store(self, tmp_path: Path):
+        from cryptography.fernet import Fernet
+        from hermes_node_plugin.tokens import TokenStore
+
+        key = Fernet.generate_key().decode("ascii")
+        store = TokenStore(path=tmp_path / "tokens.json", key=key)
+        return store
+
+    def test_touch_last_used_stamps_existing_record(self, tmp_path: Path) -> None:
+        store = self._store(tmp_path)
+        store.create("workmac")
+        before = store.list()[0]
+        assert before.last_used_at is None
+
+        store.touch_last_used("workmac")
+
+        after = store.list()[0]
+        assert after.last_used_at is not None, "last_used_at should be stamped"
+
+    def test_touch_last_used_skips_revoked(self, tmp_path: Path) -> None:
+        store = self._store(tmp_path)
+        store.create("workmac")
+        store.revoke("workmac")
+
+        # Revoked records must not be stamped (mirrors validate() semantics).
+        store.touch_last_used("workmac")
+        assert store.list()[0].last_used_at is None
+
+    def test_touch_last_used_unknown_name_is_noop(self, tmp_path: Path) -> None:
+        store = self._store(tmp_path)
+        # Should not raise on a name with no record.
+        store.touch_last_used("ghost")
+        assert store.list() == []
+
+
+# ---------------------------------------------------------------------------
 # Smoke — create_app
 # ---------------------------------------------------------------------------
 

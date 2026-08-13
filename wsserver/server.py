@@ -955,6 +955,16 @@ def create_app(
             server_proof = _e2e.compute_server_proof(e2e_handshake_key)
             is_valid = True  # proof verified — skip token store check
             logger.warning("E2E proof verified for %r session=%s", auth.node_name, session_id)
+            # E2E bypasses token_store.validate() (the only place that
+            # stamps last_used_at), so record the successful connect here
+            # or `hermes node list` shows "-" forever for E2E nodes.
+            # Best-effort; offloaded to a thread like the legacy path.
+            try:
+                await asyncio.to_thread(token_store.touch_last_used, auth.node_name)
+            except Exception as exc:
+                logger.debug(
+                    "touch_last_used failed for %r: %s", auth.node_name, exc
+                )
         else:
             # Legacy auth — validate token
             is_valid = False

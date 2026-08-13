@@ -528,6 +528,45 @@ class TokenStore:
             pass
         return True
 
+    def touch_last_used(self, name: str) -> None:
+        """Stamp ``last_used_at`` for ``name`` without validating a token.
+
+        The legacy auth path records the connect time inside
+        :meth:`validate` (it has the presented token to check). E2E nodes
+        authenticate via proof instead — :meth:`validate` is never called
+        for them — so ``last_used_at`` would otherwise stay ``None`` and
+        ``hermes node list`` renders it as ``-``. This method lets the E2E
+        path record the successful connect explicitly, using the node name
+        only (the proof was already verified by the caller).
+
+        Best-effort, mirroring :meth:`validate`: a write failure is
+        swallowed — the connect already succeeded, the stamp is a
+        nice-to-have audit field. No token comparison happens here.
+
+        Args:
+            name: Node name whose record to stamp.
+
+        Raises:
+            TokenStoreError: ``name`` fails the character / length policy.
+        """
+        name = _validate_name(name)
+        now = _now_iso()
+
+        def _write(records: list[_StoredRecord]) -> list[_StoredRecord]:
+            for rec in records:
+                if rec.name == name and not rec.revoked:
+                    rec.last_used_at = now
+                    break
+            return records
+
+        try:
+            self._mutate(_write)
+        except Exception:  # noqa: S110
+            # Broad on purpose: a transient disk/permission failure must
+            # not convert a successful auth into a server crash. Same
+            # contract as validate()'s best-effort write.
+            pass
+
     def resolve_token(self, name: str) -> str:
         """Return the raw pairing token for ``name``, or raise TokenStoreError.
 
