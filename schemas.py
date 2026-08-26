@@ -13,7 +13,11 @@ NODE_EXEC: dict[str, str | dict] = {
         "the hermes-node Go binary installed) and return its stdout/stderr "
         "and exit code. The command runs in the node's persistent shell, "
         "so `cd` and `export` between calls persist. Use `hermes node list` "
-        "(or `node_list()`) to see which nodes are currently connected."
+        "(or `node_list()`) to see which nodes are currently connected. "
+        "Output is truncated to 32 KB with `truncated: true` when over the "
+        "cap. For long output, append `| tail -n 100` / `| head -n 100` / "
+        "`| sed -n 'A,Bp'`, or redirect to a file and read it back. Prefer "
+        "writing files via `node_write` over echoing code back into chat."
     ),
     "parameters": {
         "type": "object",
@@ -63,7 +67,10 @@ NODE_READ: dict[str, str | dict] = {
         "flag (true if the node hit the 10 MB cap). The node enforces its "
         "own path allowlist; out-of-allowlist paths return "
         "`path_not_allowed`. For binary files, the bytes are decoded with "
-        "errors='replace' — invalid sequences become U+FFFD."
+        "errors='replace' — invalid sequences become U+FFFD. Returns up to "
+        "32 KB of content; larger files come back truncated with "
+        "`truncated: true`. To page a large file, use `node_exec` with "
+        "`sed -n 'A,Bp' <file>` or `tail -n N <file>`."
     ),
     "parameters": {
         "type": "object",
