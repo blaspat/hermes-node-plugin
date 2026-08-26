@@ -359,6 +359,48 @@ class TestHandleExecChunkEmptyFinal:
 
         _run(_test())
 
+    def test_missing_chunk_dir_is_recreated(self, tmp_path: Path) -> None:
+        from hermes_node_plugin.config import NodeServerConfig
+        from hermes_node_plugin.registry import NodeRegistry
+        from hermes_node_plugin.wsserver.server import _handle_exec_chunk
+
+        registry = NodeRegistry()
+        # Point the config at a subdirectory that does NOT exist yet — like
+        # /tmp/hermes-exec-chunks after a reboot while the gateway kept
+        # running. _handle_exec_chunk must recreate it, not raise.
+        chunk_dir = tmp_path / "chunks"
+        assert not chunk_dir.exists()
+        cfg = NodeServerConfig(exec_chunk_dir=str(chunk_dir))
+
+        async def _test():
+            waiter = await registry.register_waiter("node-c", "req-missing-dir")
+
+            await _handle_exec_chunk(
+                registry,
+                "node-c",
+                {
+                    "id": "req-missing-dir",
+                    "data": "aGVsbG8=",
+                    "more": False,
+                    "exit_code": 0,
+                    "status": "ok",
+                    "duration_ms": 5,
+                    "truncated": False,
+                },
+                cfg,
+            )
+
+            result = await asyncio.wait_for(waiter, timeout=5.0)
+            assert result["exit_code"] == 0
+            assert result["status"] == "ok"
+            assert result["output_file"]
+            assert chunk_dir.is_dir(), "chunk dir should have been recreated"
+            assert Path(result["output_file"]).parent == chunk_dir
+            with suppress(Exception):
+                Path(result["output_file"]).unlink(missing_ok=True)
+
+        _run(_test())
+
     def test_empty_final_as_only_chunk(self, tmp_path: Path) -> None:
         from hermes_node_plugin.config import NodeServerConfig
         from hermes_node_plugin.registry import NodeRegistry

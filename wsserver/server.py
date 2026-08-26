@@ -351,6 +351,11 @@ async def _handle_exec_chunk(
                 )
                 return
 
+        # The chunk dir may vanish (e.g. /tmp cleared on reboot while the
+        # gateway keeps running) — recreate it before the first write so a
+        # missing dir can't wedge exec (mkstemp would raise FileNotFoundError
+        # and drop the WSS mid-call).
+        Path(config.exec_chunk_dir).mkdir(parents=True, exist_ok=True)
         fd, path = tempfile.mkstemp(
             suffix=".chunk", prefix="exec-", dir=config.exec_chunk_dir
         )
