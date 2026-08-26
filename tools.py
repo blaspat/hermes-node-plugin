@@ -32,6 +32,27 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXEC_TIMEOUT_SECONDS = 60.0
 MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MiB
 
+# Plugin-side output caps — bound what node_exec / node_read return to the
+# LLM so oversized output can't flood the context window.
+MAX_EXEC_OUTPUT_BYTES = 32 * 1024  # 32 KiB
+MAX_READ_RETURN_BYTES = 32 * 1024  # 32 KiB
+
+
+def _truncate_output(text: str, max_bytes: int, hint: str) -> tuple[str, bool]:
+    """Truncate ``text`` to ``max_bytes`` with a paging-hint footer.
+
+    Truncates on a UTF-8 character boundary (``errors="ignore"`` drops any
+    trailing partial multibyte sequence). Returns ``(text, was_truncated)``.
+    """
+    total = len(text.encode("utf-8"))
+    if total <= max_bytes:
+        return text, False
+    head = text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+    footer = (
+        f"\n\n…[truncated: {max_bytes} of {total} bytes shown — {hint}]…"
+    )
+    return head + footer, True
+
 
 # ---------------------------------------------------------------------------
 # Retry helper
@@ -219,19 +240,17 @@ def _node_exec_impl(
                 # Unlink the temp file after a successful read.
                 with suppress(Exception):
                     Path(output_file).unlink(missing_ok=True)
-                return json.dumps({
-                    "output": output,
-                    "returncode": exec_result.get("exit_code", 0),
-                })
+                return _format_exec_result(
+                    output, exec_result.get("exit_code", 0)
+                )
             # -- legacy path (stdout/stderr inline) --------------------
             output = exec_result.get("stdout", "")
             stderr = exec_result.get("stderr", "")
             if stderr:
                 output = output + "\n[stderr]\n" + stderr
-            return json.dumps({
-                "output": output,
-                "returncode": exec_result.get("returncode", 0),
-            })
+            return _format_exec_result(
+                output, exec_result.get("returncode", 0)
+            )
         else:
             # timeout, node not connected, or other non-ok status
             error_msg = (
@@ -245,6 +264,22 @@ def _node_exec_impl(
             })
     except Exception as e:
         return json.dumps({"error": f"node_exec failed: {e}"})
+
+
+_EXEC_TRUNCATION_HINT = (
+    "re-run with '| tail -n 100', '| head -n 100', or redirect to a file and page it"
+)
+
+
+def _format_exec_result(output: str, returncode: int) -> str:
+    output, truncated = _truncate_output(
+        output, MAX_EXEC_OUTPUT_BYTES, _EXEC_TRUNCATION_HINT
+    )
+    return json.dumps({
+        "output": output,
+        "returncode": returncode,
+        "truncated": truncated,
+    })
 
 
 def _node_read_impl(
@@ -285,12 +320,11 @@ def _node_read_impl(
                     content = _base64.b64decode(content_b64).decode("utf-8")
                 except Exception:
                     content = ""
-            return json.dumps({
-                "content": content,
-                "size_bytes": read_result.get("size_bytes", 0),
-                "truncated": read_result.get("truncated", False),
-                "encoding": "utf-8",
-            })
+            return _format_read_result(
+                content,
+                read_result.get("size_bytes", 0),
+                read_result.get("truncated", False),
+            )
         else:
             error_msg = (
                 result.get("reason")
@@ -303,6 +337,25 @@ def _node_read_impl(
             })
     except Exception as e:
         return json.dumps({"error": f"node_read failed: {e}"})
+
+
+_READ_TRUNCATION_HINT = (
+    "page with node_exec 'sed -n \"A,Bp\" <file>' or 'tail -n N <file>'"
+)
+
+
+def _format_read_result(
+    content: str, size_bytes: int, node_truncated: bool
+) -> str:
+    content, plugin_truncated = _truncate_output(
+        content, MAX_READ_RETURN_BYTES, _READ_TRUNCATION_HINT
+    )
+    return json.dumps({
+        "content": content,
+        "size_bytes": size_bytes,
+        "truncated": bool(node_truncated or plugin_truncated),
+        "encoding": "utf-8",
+    })
 
 
 def _node_write_impl(
