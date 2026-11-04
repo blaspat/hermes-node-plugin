@@ -40,7 +40,7 @@ prefix and lowercased):
     structured ``hello_err`` / ``auth_err`` (reason
     ``handshake_timeout``) and closes with 4004. Issue #13.
 
-  * ``heartbeat_stale_seconds``   (int)   default ``60``
+  * ``heartbeat_stale_seconds``   (int)   default ``90``
     — a node whose last inbound message is older than this is
     considered dead (PROTOCOL §6) and the runner's background
     sweep will close its WebSocket. Override with
@@ -189,8 +189,11 @@ class NodeServerConfig:
     # PROTOCOL §6: a node is considered dead after this many seconds
     # without any inbound message. The runner's background sweep
     # closes the WebSocket of any node whose ``last_heartbeat`` is
-    # older than this threshold. See issue #19.
-    heartbeat_stale_seconds: int = 60
+    # older than this threshold. See issue #19. Aligned with the client's
+    # DefaultPongTimeout (90s) so the server doesn't yank the socket before
+    # the client's own watchdog fires (single dropped ping used to kill
+    # workmac at 60s). Override with HERMES_NODES_HEARTBEAT_STALE_SECONDS.
+    heartbeat_stale_seconds: int = 90
     # How often the runner's background sweep runs. Lower means
     # faster cleanup of dead nodes; higher means less registry
     # churn. Must be ``> 0``. See issue #19.
