@@ -93,6 +93,10 @@ class ChunkState:
     path: str
     last_chunk_at: float
     total_bytes: int
+    # Chunked file reads (PROTOCOL §3.9a) reuse the assembly machinery
+    # but need ordering and end-to-end verification.
+    seq: int = 0
+    hasher: Any = None
 
 
 def _now_utc() -> datetime:
@@ -141,6 +145,9 @@ class NodeConnection:
     session_id: str = ""
     remote_addr: str = ""
     last_heartbeat: datetime = field(default=None)  # type: ignore[assignment]
+    # Capabilities the node advertised in `hello` (PROTOCOL §3.1). Used
+    # to decide whether a call can use a chunked transfer.
+    capabilities: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # ``last_heartbeat`` defaults to ``connected_at`` so a freshly

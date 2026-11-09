@@ -87,6 +87,10 @@ MAX_CAPABILITIES = 16
 MAX_CAPABILITY_LEN = 32
 MAX_TS_LEN = 32
 
+# Capabilities this server supports. read_chunk keeps big node→server
+# transfers out of the HTTP response (PROTOCOL §3.9a).
+_SERVER_CAPABILITIES = ["exec_chunk", "read_chunk"]
+
 # Protocol version — accept any minor at the same major (PROTOCOL §5).
 PROTOCOL_MAJOR = 0
 
@@ -232,7 +236,11 @@ class _AuthMessage(BaseModel):
 
 
 def _chunk_dir_total_bytes(chunk_dir: str) -> int:
-    """Return the total size in bytes of all ``.chunk`` files in ``chunk_dir``.
+    """Return the total size in bytes of all ``exec-*.chunk`` files.
+
+    Only exec assemblies count: read assemblies (§3.9a) are bounded per
+    file by the node's ``fs_chunk_max_mb`` and pruned by age, so letting
+    a 200 MiB read consume the exec budget would block every later exec.
 
     Runs synchronously — callers should wrap in ``asyncio.to_thread`` when
     the directory may contain large numbers of files.
@@ -242,7 +250,7 @@ def _chunk_dir_total_bytes(chunk_dir: str) -> int:
     total = 0
     try:
         for entry in _os.scandir(chunk_dir):
-            if entry.is_file() and entry.name.endswith(".chunk"):
+            if entry.is_file() and entry.name.startswith("exec-"):
                 try:
                     total += entry.stat().st_size
                 except OSError:
@@ -418,6 +426,336 @@ async def _handle_exec_chunk(
 
 
 # ---------------------------------------------------------------------------
+# read_chunk assembly (PROTOCOL §3.9a)
+# ---------------------------------------------------------------------------
+
+
+async def _handle_read_chunk(
+    registry: NodeRegistry,
+    node_name: str,
+    raw: dict[str, Any],
+    config: NodeServerConfig,
+) -> None:
+    """Assemble an inbound ``read_chunk`` stream into a local file.
+
+    The node streams a large file in base64 chunks. Bytes go straight to
+    disk, and the final frame completes the waiter with the temp file's
+    path — the payload never travels back through an HTTP response, which
+    is what made multi-hundred-MB reads expensive (PROTOCOL §3.9a).
+
+    Schema per PROTOCOL §3.9a:
+
+        {
+          "type": "read_chunk",
+          "id": "<request_id>",
+          "seq": 3,
+          "data": "<base64>",        // empty on the final frame
+          "more": true,
+          "status": "ok",            // final frame only
+          "size_bytes": 1234,        // final frame only
+          "sha256": "<hex>",         // final frame only
+          "error": "io_error",       // final frame only, on failure
+          "error_detail": "..."
+        }
+    """
+    import hashlib as _hashlib
+    import time as _time
+
+    request_id = raw.get("id")
+    if not isinstance(request_id, str) or not request_id:
+        logger.warning(
+            "read_chunk from %r missing or invalid request_id: %r",
+            node_name,
+            request_id,
+        )
+        return
+
+    more = raw.get("more", True)
+    data_b64 = raw.get("data")
+    if not isinstance(data_b64, str) or (not data_b64 and more):
+        logger.warning(
+            "read_chunk from %r id=%r missing or invalid data",
+            node_name,
+            request_id,
+        )
+        return
+
+    try:
+        chunk_bytes = _base64.b64decode(data_b64)
+    except Exception:
+        logger.warning(
+            "read_chunk from %r id=%r base64 decode failed", node_name, request_id
+        )
+        await _abort_read_chunk(
+            registry,
+            node_name,
+            request_id,
+            "bad_base64",
+            "chunk payload is not valid base64",
+        )
+        return
+
+    cs = await registry.get_chunk_state(node_name, request_id)
+    if cs is None:
+        # ponytail: same dir and sweep as exec_chunk. The total-dir cap is
+        # deliberately not applied — a read is one file bounded by the
+        # node's fs_chunk_max_mb, and a 50 MiB dir cap would reject the
+        # very transfers this path exists for.
+        # Read assemblies live in a subdirectory: the startup orphan sweep
+        # unlinks every *.chunk in the chunk dir, which would delete files
+        # the agent has just been handed a path to.
+        read_dir = Path(config.exec_chunk_dir) / "reads"
+        read_dir.mkdir(parents=True, exist_ok=True)
+        fd, path = tempfile.mkstemp(suffix=".bin", prefix="read-", dir=read_dir)
+        cs = ChunkState(
+            file=os.fdopen(fd, "wb"),
+            path=path,
+            last_chunk_at=_time.monotonic(),
+            total_bytes=0,
+            hasher=_hashlib.sha256(),
+        )
+
+    # -- Ordering: seq starts at 1 and increments by one per frame --------
+    want_seq = cs.seq + 1
+    seq = raw.get("seq")
+    if isinstance(seq, int) and seq != want_seq:
+        await _abort_read_chunk(
+            registry,
+            node_name,
+            request_id,
+            "bad_sequence",
+            f"got seq {seq}, want {want_seq}",
+            state=cs,
+        )
+        return
+    cs.seq = want_seq
+
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, cs.file.write, chunk_bytes)
+    except Exception:
+        logger.warning(
+            "read_chunk from %r id=%r write to temp file failed",
+            node_name,
+            request_id,
+        )
+        await _abort_read_chunk(
+            registry, node_name, request_id, "io_error", "temp file write failed",
+            state=cs,
+        )
+        return
+
+    cs.total_bytes += len(chunk_bytes)
+    if cs.hasher is not None:
+        cs.hasher.update(chunk_bytes)
+    cs.last_chunk_at = _time.monotonic()
+    await registry.set_chunk_state(node_name, request_id, cs)
+
+    if more:
+        return
+
+    # -- Final frame: verify, close, hand the path to the waiter ----------
+    await registry.remove_chunk_state(node_name, request_id)
+    with suppress(Exception):
+        cs.file.close()
+
+    status = raw.get("status", "ok")
+    if status != "ok":
+        reason = raw.get("error") or "io_error"
+        detail = raw.get("error_detail") or ""
+        with suppress(Exception):
+            Path(cs.path).unlink(missing_ok=True)
+        await registry.complete_waiter(
+            node_name,
+            request_id,
+            {"status": "error", "reason": reason, "error_detail": detail},
+        )
+        return
+
+    got_sha = cs.hasher.hexdigest() if cs.hasher is not None else ""
+    want_sha = raw.get("sha256")
+    want_size = raw.get("size_bytes")
+    if isinstance(want_size, int) and want_size != cs.total_bytes:
+        with suppress(Exception):
+            Path(cs.path).unlink(missing_ok=True)
+        await registry.complete_waiter(
+            node_name,
+            request_id,
+            {
+                "status": "error",
+                "reason": "size_mismatch",
+                "error_detail": f"got {cs.total_bytes} bytes, want {want_size}",
+            },
+        )
+        return
+    if isinstance(want_sha, str) and want_sha and want_sha.lower() != got_sha:
+        with suppress(Exception):
+            Path(cs.path).unlink(missing_ok=True)
+        await registry.complete_waiter(
+            node_name,
+            request_id,
+            {
+                "status": "error",
+                "reason": "sha_mismatch",
+                "error_detail": f"computed {got_sha}, want {want_sha}",
+            },
+        )
+        return
+
+    await registry.complete_waiter(
+        node_name,
+        request_id,
+        {
+            "output_file": cs.path,
+            "size_bytes": cs.total_bytes,
+            "sha256": got_sha,
+            "status": "ok",
+        },
+    )
+
+
+async def _abort_read_chunk(
+    registry: NodeRegistry,
+    node_name: str,
+    request_id: str,
+    reason: str,
+    detail: str,
+    *,
+    state: ChunkState | None = None,
+) -> None:
+    """Drop a half-assembled read and fail its waiter.
+
+    Removes the temp file and closes the handle so a bad stream can't leak
+    an fd or disk space, then completes the waiter so the caller gets the
+    error instead of a timeout.
+    """
+    cs = state if state is not None else await registry.remove_chunk_state(
+        node_name, request_id
+    )
+    if cs is not None:
+        with suppress(Exception):
+            cs.file.close()
+        with suppress(Exception):
+            Path(cs.path).unlink(missing_ok=True)
+    await registry.remove_chunk_state(node_name, request_id)
+    await registry.complete_waiter(
+        node_name,
+        request_id,
+        {"status": "error", "reason": reason, "error_detail": detail},
+    )
+
+
+# ---------------------------------------------------------------------------
+# write_chunk sending (PROTOCOL §3.11a)
+# ---------------------------------------------------------------------------
+
+
+_WRITE_CHUNK_BYTES = 1024 * 1024
+
+
+def _sha256_file(path: str, block: int = _WRITE_CHUNK_BYTES) -> str:
+    """Return the hex SHA-256 of a file, read in chunks."""
+    import hashlib as _hashlib
+
+    h = _hashlib.sha256()
+    with open(path, "rb") as fh:
+        for piece in iter(lambda: fh.read(block), b""):
+            h.update(piece)
+    return h.hexdigest()
+
+
+async def _send_write_chunk(
+    websocket: Any,
+    request_id: str,
+    seq: int,
+    piece: bytes,
+    more: bool,
+    header: dict[str, Any] | None = None,
+) -> None:
+    msg: dict[str, Any] = {
+        "type": "write_chunk",
+        "id": request_id,
+        "seq": seq,
+        "data": _base64.b64encode(piece).decode("ascii"),
+        "more": more,
+    }
+    if header:
+        msg.update(header)
+    await websocket.send_json(msg)
+
+
+async def _send_write_chunks(
+    websocket: Any,
+    request_id: str,
+    path: str,
+    mode: str,
+    source: bytes,
+) -> None:
+    """Stream an in-memory payload as ``write_chunk`` frames."""
+    import hashlib as _hashlib
+
+    total = len(source)
+    header = {
+        "path": path,
+        "mode": mode,
+        "size_bytes": total,
+        "sha256": _hashlib.sha256(source).hexdigest(),
+    }
+    seq = 0
+    for off in range(0, total, _WRITE_CHUNK_BYTES):
+        seq += 1
+        await _send_write_chunk(
+            websocket,
+            request_id,
+            seq,
+            source[off : off + _WRITE_CHUNK_BYTES],
+            off + _WRITE_CHUNK_BYTES < total,
+            header if seq == 1 else None,
+        )
+    if seq == 0:
+        # Empty file still needs a closing frame or the waiter hangs.
+        await _send_write_chunk(websocket, request_id, 1, b"", False, header)
+
+
+async def _send_write_from_file(
+    websocket: Any,
+    request_id: str,
+    path: str,
+    mode: str,
+    from_path: str,
+) -> None:
+    """Stream a local file as ``write_chunk`` frames, one chunk at a time.
+
+    Keeps the payload off the HTTP request body entirely: a 500 MiB write
+    becomes one small POST plus frames the server reads straight off disk.
+    """
+    loop = asyncio.get_running_loop()
+    size = Path(from_path).stat().st_size
+    shasum = await loop.run_in_executor(None, _sha256_file, from_path)
+    header = {"path": path, "mode": mode, "size_bytes": size, "sha256": shasum}
+
+    count = (size + _WRITE_CHUNK_BYTES - 1) // _WRITE_CHUNK_BYTES
+    if count == 0:
+        await _send_write_chunk(websocket, request_id, 1, b"", False, header)
+        return
+
+    fh = await loop.run_in_executor(None, open, from_path, "rb")
+    try:
+        for seq in range(1, count + 1):
+            piece = await loop.run_in_executor(None, fh.read, _WRITE_CHUNK_BYTES)
+            await _send_write_chunk(
+                websocket,
+                request_id,
+                seq,
+                piece,
+                seq < count,
+                header if seq == 1 else None,
+            )
+    finally:
+        await loop.run_in_executor(None, fh.close)
+
+
+# ---------------------------------------------------------------------------
 # Chunk timeout sweep (issue #116)
 # ---------------------------------------------------------------------------
 
@@ -470,7 +808,7 @@ async def _chunk_timeout_sweep(
                         "status": "error",
                         "code": 408,
                         "reason": (
-                            f"exec_chunk timed out after {timeout_s}s "
+                            f"chunked transfer timed out after {timeout_s}s "
                             f"without a closing chunk"
                         ),
                     },
@@ -671,9 +1009,12 @@ class _ReadRequest(BaseModel):
 
 class _WriteRequest(BaseModel):
     path: str
-    content: str
+    content: str | None = None
     mode: str = "overwrite"
     timeout_ms: int | None = None
+    # Source file on this host — streamed as write_chunk frames instead
+    # of travelling in the request body (PROTOCOL §3.11a).
+    from_path: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -863,19 +1204,19 @@ def create_app(
                         session_id,
                         ecdh_pub=_e2e.encode_public_key(server_kp.public),
                         salt=_e2e.encode_b64(salt_bytes),
-                        capabilities=["exec_chunk"],
+                        capabilities=_SERVER_CAPABILITIES,
                     ),
                 )
             else:
                 await _send_json_safe(
                     websocket,
-                    _build_hello_ack(hello.protocol_version, session_id, capabilities=["exec_chunk"]),
+                    _build_hello_ack(hello.protocol_version, session_id, capabilities=_SERVER_CAPABILITIES),
                 )
         else:
             e2e_handshake_key = None
             await _send_json_safe(
                 websocket,
-                _build_hello_ack(hello.protocol_version, session_id, capabilities=["exec_chunk"]),
+                _build_hello_ack(hello.protocol_version, session_id, capabilities=_SERVER_CAPABILITIES),
             )
 
         # -- 2. auth ---------------------------------------------------------
@@ -1002,6 +1343,7 @@ def create_app(
             websocket=websocket,
             session_id=session_id,
             remote_addr=remote_addr,
+            capabilities=list(hello.capabilities or []),
         )
         previous = await registry.register(conn)
         logger.warning(
@@ -1079,6 +1421,12 @@ def create_app(
                 # Handle exec_chunk streaming before general routing.
                 if raw.get("type") == "exec_chunk":
                     await _handle_exec_chunk(
+                        registry, auth.node_name, raw, config
+                    )
+                    continue
+                # Same for chunked file reads.
+                if raw.get("type") == "read_chunk":
+                    await _handle_read_chunk(
                         registry, auth.node_name, raw, config
                     )
                     continue
@@ -1270,6 +1618,14 @@ def create_app(
 
         request_id = str(uuid.uuid4())
         timeout_ms = body.timeout_ms or 30_000
+
+        if not body.content and not body.from_path:
+            return {
+                "status": "error",
+                "code": 400,
+                "reason": "write requires content or from_path",
+            }
+
         try:
             future = await registry.register_waiter(node_name, request_id)
         except Exception as e:
@@ -1280,18 +1636,45 @@ def create_app(
             }
 
         try:
-            import base64 as _base64
+            use_chunks = "write_chunk" in conn.capabilities
+            if body.from_path:
+                if not use_chunks:
+                    await registry.unregister_waiter(node_name, request_id)
+                    return {
+                        "status": "error",
+                        "code": 400,
+                        "reason": "node does not advertise write_chunk",
+                    }
+                await _send_write_from_file(
+                    conn.websocket,
+                    request_id,
+                    body.path,
+                    body.mode,
+                    body.from_path,
+                )
+            elif use_chunks:
+                await _send_write_chunks(
+                    conn.websocket,
+                    request_id,
+                    body.path,
+                    body.mode,
+                    (body.content or "").encode("utf-8"),
+                )
+            else:
+                import base64 as _base64
 
-            content_b64 = _base64.b64encode(body.content.encode("utf-8")).decode("ascii")
-            await conn.websocket.send_json(
-                {
-                    "type": "write",
-                    "id": request_id,
-                    "path": body.path,
-                    "content_b64": content_b64,
-                    "mode": body.mode,
-                }
-            )
+                content_b64 = _base64.b64encode(
+                    (body.content or "").encode("utf-8")
+                ).decode("ascii")
+                await conn.websocket.send_json(
+                    {
+                        "type": "write",
+                        "id": request_id,
+                        "path": body.path,
+                        "content_b64": content_b64,
+                        "mode": body.mode,
+                    }
+                )
         except Exception as e:
             await registry.unregister_waiter(node_name, request_id)
             return {
