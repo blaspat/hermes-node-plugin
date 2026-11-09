@@ -306,11 +306,26 @@ def _node_read_impl(
         cfg = load_config()
         url = f"http://{cfg.connect_host}:{cfg.port}/nodes/{target}/read"
         result = _request_with_retry(
-            "POST", url, json_body={"path": path}, timeout=timeout_s + 5.0,
+            "POST",
+            url,
+            json_body=(
+                {"path": path, "timeout_ms": timeout_ms}
+                if timeout_ms is not None
+                else {"path": path}
+            ),
+            timeout=timeout_s + 5.0,
         )
 
         if result.get("status") == "ok":
             read_result = result.get("read_result", {})
+
+            # Chunked read (PROTOCOL §3.9a): the node streamed the file to
+            # disk on this host. Return the head plus the local path so the
+            # agent can page it in place instead of re-transferring.
+            output_file = read_result.get("output_file")
+            if output_file:
+                return _read_local_head(output_file, read_result)
+
             import base64 as _base64
 
             content_b64 = read_result.get("content_b64", "")
@@ -344,6 +359,39 @@ _READ_TRUNCATION_HINT = (
 )
 
 
+def _read_local_head(output_file: str, read_result: dict[str, Any]) -> str:
+    """Return the head of a chunked-read file plus its local path.
+
+    The full file already landed on this host, so the agent can page it
+    with read_file/sed/rg instead of paying for another transfer.
+    """
+    size_bytes = int(read_result.get("size_bytes") or 0)
+    try:
+        with open(output_file, "rb") as fh:
+            head = fh.read(MAX_READ_RETURN_BYTES)
+    except OSError as e:
+        return json.dumps({"error": f"node_read: assembled file unreadable: {e}"})
+
+    _prune_old_read_files(Path(output_file).parent)
+    return json.dumps({
+        "content": head.decode("utf-8", errors="ignore"),
+        "size_bytes": size_bytes,
+        "truncated": size_bytes > len(head),
+        "encoding": "utf-8",
+        "path": output_file,
+    })
+
+
+def _prune_old_read_files(directory: Path, max_age_s: float = 86400.0) -> None:
+    """Drop read assemblies older than a day — they are scratch space."""
+    cutoff = time.time() - max_age_s
+    with suppress(OSError):
+        for entry in directory.glob("read-*.bin"):
+            with suppress(OSError):
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+
+
 def _format_read_result(
     content: str, size_bytes: int, node_truncated: bool
 ) -> str:
@@ -361,16 +409,21 @@ def _format_read_result(
 def _node_write_impl(
     target: str,
     path: str,
-    content: str,
+    content: str | None = None,
     *,
     mode: str = "overwrite",
     timeout_ms: int | None = None,
+    from_path: str | None = None,
 ) -> str:
-    """Write text to a file on the named node."""
+    """Write text, or a gateway-local file, to a file on the named node."""
     if not target:
         return json.dumps({"error": "node_write: target must be a non-empty string"})
     if not path:
         return json.dumps({"error": "node_write: path must be a non-empty string"})
+    if not content and not from_path:
+        return json.dumps(
+            {"error": "node_write: supply content or from_path"}
+        )
 
     from .config import load_config
 
@@ -380,20 +433,31 @@ def _node_write_impl(
         else DEFAULT_EXEC_TIMEOUT_SECONDS
     )
 
-    content_bytes = content.encode("utf-8")
-    if len(content_bytes) > MAX_FILE_BYTES:
-        return json.dumps({
-            "error": (
-                f"node_write: content is {len(content_bytes)} bytes, exceeds "
-                f"MAX_FILE_BYTES ({MAX_FILE_BYTES}); chunk or truncate first"
-            )
-        })
+    # The 10 MiB cap only applies to inline content; from_path exists
+    # precisely so larger files can stream.
+    if content is not None:
+        content_bytes = content.encode("utf-8")
+        if len(content_bytes) > MAX_FILE_BYTES:
+            return json.dumps({
+                "error": (
+                    f"node_write: content is {len(content_bytes)} bytes, exceeds "
+                    f"MAX_FILE_BYTES ({MAX_FILE_BYTES}); use from_path to stream "
+                    f"a larger file"
+                )
+            })
 
     try:
         cfg = load_config()
         url = f"http://{cfg.connect_host}:{cfg.port}/nodes/{target}/write"
+        payload: dict[str, Any] = {"path": path, "mode": mode}
+        if from_path:
+            payload["from_path"] = from_path
+        else:
+            payload["content"] = content
+        if timeout_ms is not None:
+            payload["timeout_ms"] = timeout_ms
         result = _request_with_retry(
-            "POST", url, json_body={"path": path, "content": content, "mode": mode},
+            "POST", url, json_body=payload,
             timeout=timeout_s + 5.0,
         )
 
@@ -499,6 +563,7 @@ def node_write(args: dict, **kw: Any) -> str:
         content=args.get("content"),
         mode=args.get("mode", "overwrite"),
         timeout_ms=args.get("timeout_ms"),
+        from_path=args.get("from_path"),
     )
 
 

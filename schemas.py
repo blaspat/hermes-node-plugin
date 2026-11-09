@@ -99,9 +99,11 @@ NODE_WRITE: dict[str, str | dict] = {
     "description": (
         "Write UTF-8 text to a file on a paired remote node. By default "
         "overwrites the file; pass `mode='append'` to add to an existing "
-        "file or `mode='create'` to refuse overwriting. Content is "
-        "capped at 10 MB per call (matches the protocol's file cap). The "
-        "node enforces its own path allowlist."
+        "file or `mode='create'` to refuse overwriting. Supply either "
+        "`content` inline (capped at 10 MB per call) or `from_path`, a "
+        "file on the gateway host to stream from — use `from_path` for "
+        "large files or anything binary. The node enforces its own path "
+        "allowlist."
     ),
     "parameters": {
         "type": "object",
@@ -116,7 +118,18 @@ NODE_WRITE: dict[str, str | dict] = {
             },
             "content": {
                 **_STRING_PARAM,
-                "description": "UTF-8 text to write to the file",
+                "description": (
+                    "UTF-8 text to write to the file. Required unless "
+                    "`from_path` is supplied."
+                ),
+            },
+            "from_path": {
+                **_STRING_PARAM,
+                "description": (
+                    "Path on the gateway host to stream to the node. "
+                    "Alternative to `content`, for large or binary "
+                    "files."
+                ),
             },
             "mode": {
                 "type": "string",
@@ -133,7 +146,7 @@ NODE_WRITE: dict[str, str | dict] = {
                 "description": "Per-call timeout in milliseconds",
             },
         },
-        "required": ["target", "path", "content"],
+        "required": ["target", "path"],
     },
 }
 
