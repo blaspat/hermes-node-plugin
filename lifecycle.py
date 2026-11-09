@@ -204,6 +204,17 @@ class ServerRunner:
             port=self._config.port,
             log_level="warning",
             lifespan="off",
+            # Disable uvicorn's transport-level WS keepalive ping. It is
+            # a protocol-level Ping control frame that only the transport
+            # can answer, so a node busy inside a long handler (a `sleep
+            # 120` exec, a 50 MB chunk stream over a slow uplink) cannot
+            # pong it in time and uvicorn closes the socket 1011
+            # "keepalive ping timeout" mid-call. Reproduced: a 50s exec
+            # dies at ~40s with the ping on, completes with it off.
+            # Liveness is covered by the app-level heartbeat (PROTOCOL §6,
+            # heartbeat_stale_seconds=90) which counts any inbound message.
+            ws_ping_interval=None,
+            ws_ping_timeout=None,
             **ssl_kwargs,
         )
         if not uvicorn_config.loaded:
