@@ -347,3 +347,40 @@ class TestReadHeadPreview:
         assert out["size_bytes"] == len(body)
         assert out["truncated"] is True
         assert len(out["content"]) == MAX_READ_RETURN_BYTES
+
+
+class TestWriteToolSurface:
+    """node_write must be able to reach from_path; content stays optional."""
+
+    def test_schema_does_not_require_content(self) -> None:
+        from hermes_node_plugin.schemas import NODE_WRITE
+
+        params = NODE_WRITE["parameters"]
+        assert "content" in params["properties"]
+        assert "from_path" in params["properties"]
+        assert params["required"] == ["target", "path"]
+
+    def test_handler_forwards_from_path(self, monkeypatch) -> None:
+        from hermes_node_plugin import tools
+
+        seen: dict = {}
+
+        def _fake(method, url, json_body=None, **kw):
+            seen.update(json_body or {})
+            return {"status": "ok", "write_result": {"bytes_written": 5}}
+
+        monkeypatch.setattr(tools, "_request_with_retry", _fake)
+        monkeypatch.setattr(
+            "hermes_node_plugin.config.load_config",
+            lambda: type("C", (), {"connect_host": "127.0.0.1", "port": 7000})(),
+        )
+        out = json.loads(tools.node_write({"target": "n", "path": "/tmp/x", "from_path": "/tmp/src"}))
+        assert out["bytes_written"] == 5
+        assert seen["from_path"] == "/tmp/src"
+        assert "content" not in seen
+
+    def test_neither_content_nor_from_path_rejected(self) -> None:
+        from hermes_node_plugin import tools
+
+        out = json.loads(tools.node_write({"target": "n", "path": "/tmp/x"}))
+        assert "supply content or from_path" in out["error"]

@@ -409,16 +409,21 @@ def _format_read_result(
 def _node_write_impl(
     target: str,
     path: str,
-    content: str,
+    content: str | None = None,
     *,
     mode: str = "overwrite",
     timeout_ms: int | None = None,
+    from_path: str | None = None,
 ) -> str:
-    """Write text to a file on the named node."""
+    """Write text, or a gateway-local file, to a file on the named node."""
     if not target:
         return json.dumps({"error": "node_write: target must be a non-empty string"})
     if not path:
         return json.dumps({"error": "node_write: path must be a non-empty string"})
+    if not content and not from_path:
+        return json.dumps(
+            {"error": "node_write: supply content or from_path"}
+        )
 
     from .config import load_config
 
@@ -428,19 +433,27 @@ def _node_write_impl(
         else DEFAULT_EXEC_TIMEOUT_SECONDS
     )
 
-    content_bytes = content.encode("utf-8")
-    if len(content_bytes) > MAX_FILE_BYTES:
-        return json.dumps({
-            "error": (
-                f"node_write: content is {len(content_bytes)} bytes, exceeds "
-                f"MAX_FILE_BYTES ({MAX_FILE_BYTES}); chunk or truncate first"
-            )
-        })
+    # The 10 MiB cap only applies to inline content; from_path exists
+    # precisely so larger files can stream.
+    if content is not None:
+        content_bytes = content.encode("utf-8")
+        if len(content_bytes) > MAX_FILE_BYTES:
+            return json.dumps({
+                "error": (
+                    f"node_write: content is {len(content_bytes)} bytes, exceeds "
+                    f"MAX_FILE_BYTES ({MAX_FILE_BYTES}); use from_path to stream "
+                    f"a larger file"
+                )
+            })
 
     try:
         cfg = load_config()
         url = f"http://{cfg.connect_host}:{cfg.port}/nodes/{target}/write"
-        payload: dict[str, Any] = {"path": path, "content": content, "mode": mode}
+        payload: dict[str, Any] = {"path": path, "mode": mode}
+        if from_path:
+            payload["from_path"] = from_path
+        else:
+            payload["content"] = content
         if timeout_ms is not None:
             payload["timeout_ms"] = timeout_ms
         result = _request_with_retry(
@@ -550,6 +563,7 @@ def node_write(args: dict, **kw: Any) -> str:
         content=args.get("content"),
         mode=args.get("mode", "overwrite"),
         timeout_ms=args.get("timeout_ms"),
+        from_path=args.get("from_path"),
     )
 
 
